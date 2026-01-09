@@ -1,0 +1,256 @@
+✅ Escalation Semantics (Revised)
+Core rule
+
+Only the receiving component mints the escalate receipt.
+That receipt is effectively:
+
+a copy/continuation of the parent context
+
+with a new child obligation id
+
+referencing the parent receipt / parent obligation
+
+carrying forward any relevant task info (as reference only)
+
+What the escalate receipt means
+
+An escalate receipt is an acceptance-by-transfer:
+
+Terminates the parent obligation (“old owner no longer owns it”)
+
+Creates a child obligation owned by the receiver (“new owner now owns it”)
+
+This keeps “acceptance mints receipts” consistent, and avoids the old owner forging “transfer happened” claims. 🔒
+
+Receipt Envelope Changes (minimal, explicit)
+
+Add these fields inside body.escalation (not new top-level columns unless you want indexing):
+
+"body": {
+  "escalation": {
+    "parent_receipt_id": "rcpt_accept_old_001",
+    "parent_obligation_id": "obl_parent_001",
+    "child_obligation_id": "obl_child_001",
+    "from": "CogniGate.beta",
+    "to": "DeleGate.alpha",
+    "reason": "Needs authority to mint plan / new obligation.",
+    "copied_task_id": "tsk_123"
+  }
+}
+
+Hard requirements for phase=escalate
+
+body.escalation.parent_receipt_id required
+
+body.escalation.parent_obligation_id required
+
+body.escalation.child_obligation_id required
+
+body.escalation.from required
+
+body.escalation.to required
+
+body.escalation.reason required
+
+And:
+
+recipient MUST equal body.escalation.to
+
+created_by MUST equal recipient
+(receiver mints it) ✅
+
+Optional but recommended:
+
+task_ref.task_id present AND/OR body.escalation.copied_task_id
+
+plan_ref may be carried if relevant
+
+Invariants (ReceiptGate validation rules)
+A) Receiver-only minting
+
+For phase = escalate:
+
+created_by == recipient
+
+recipient == body.escalation.to
+
+body.escalation.from != body.escalation.to
+
+If violated → 422 VALIDATION_ERROR.
+
+B) Parent must exist and be coherent
+
+ReceiptGate MUST confirm:
+
+parent_receipt_id exists
+
+parent_receipt.phase == accepted
+
+parent_receipt.obligation_id == body.escalation.parent_obligation_id
+
+If violated → 409 ESCALATE_PARENT_INVALID (or 422; pick one—409 is nicer for “ledger state conflict”).
+
+C) Child obligation must be fresh
+
+ReceiptGate MUST confirm:
+
+No existing receipts already exist for child_obligation_id
+
+(or allow it only if idempotent replay)
+
+If violated → 409 CHILD_OBLIGATION_ALREADY_EXISTS
+
+D) Escalation is terminal for the parent obligation
+
+ReceiptGate MUST confirm:
+
+There is no existing terminal receipt for parent_obligation_id
+(complete|escalate|cancel)
+
+If violated → 409 OBLIGATION_ALREADY_TERMINATED
+
+Consequence: Inbox / open-obligation derivation
+
+Your existing view stays mostly correct, but now we want to ensure:
+
+Parent obligation is closed by the receiver-minted escalate receipt.
+
+Child obligation opens by the receiver minting either:
+
+an accepted receipt for the new child_obligation_id
+or
+
+we allow the escalate receipt itself to serve as the “acceptance event” for the child.
+
+Choose one (I recommend Option 2 for fewer receipts):
+Option 1: Two receipts (more explicit)
+
+Receiver mints:
+
+escalate (terminates parent, declares child ID)
+
+accepted (opens child obligation normally)
+
+This is more verbose but very pure.
+
+Option 2: One receipt (what your caveat implies)
+
+Receiver mints one escalate receipt that:
+
+terminates parent obligation
+
+also functions as “accepted-by-transfer” for child obligation
+
+✅ This matches “copy of the old one, new child_id, ref parent id/task.”
+
+I’ll spec Option 2.
+
+Update the open-obligation view accordingly
+
+We treat escalate as terminal for parent, and as an “accept-equivalent” for child only if we store the child id.
+
+That means open obligations should include:
+
+accepted receipts (normal)
+
+PLUS escalate receipts when interpreted as opening the child_obligation_id
+
+Implementation approach: create a derived view v_obligation_open_events that normalizes both into a common “open event” stream.
+
+Example SQL (Codex-friendly concept):
+
+-- open events for obligations
+CREATE OR REPLACE VIEW v_obligation_open_events AS
+SELECT
+  receipt_id,
+  obligation_id,
+  recipient,
+  created_at,
+  'accepted' AS open_kind
+FROM receipts
+WHERE phase = 'accepted'
+
+UNION ALL
+
+SELECT
+  receipt_id,
+  (body->'escalation'->>'child_obligation_id') AS obligation_id,
+  recipient,
+  created_at,
+  'escalated_accept' AS open_kind
+FROM receipts
+WHERE phase = 'escalate'
+  AND (body->'escalation'->>'child_obligation_id') IS NOT NULL;
+
+
+Then “open obligations” is:
+
+CREATE OR REPLACE VIEW v_open_obligations AS
+SELECT e.*
+FROM v_obligation_open_events e
+WHERE NOT EXISTS (
+  SELECT 1 FROM receipts t
+  WHERE t.obligation_id = e.obligation_id
+    AND t.phase IN ('complete', 'cancel', 'escalate')
+);
+
+
+(For child obligations, escalate becomes terminal only when that child is escalated again.)
+
+API Validation Patch (Codex-ready rules)
+
+Update the escalate validation from earlier:
+
+Old (wrong now)
+
+“escalate minted by current owner”
+
+“escalate requires accepted exists”
+
+“escalate terminal”
+
+New (correct)
+
+receiver mints it
+
+validates parent receipt
+
+creates child obligation id
+
+acts as open event for child obligation
+
+Unit Test Additions / Updates
+
+Replace the old escalate tests with these:
+
+Happy path
+
+escalate_receiver_mints_ok
+
+Create parent accepted receipt (old owner)
+
+Receiver posts escalate referencing parent + new child id
+
+Assert:
+
+parent obligation now terminated
+
+child obligation now appears in receiver inbox/open list
+
+Validation
+
+escalate_reject_if_created_by_not_recipient
+
+escalate_reject_if_parent_receipt_missing
+
+escalate_reject_if_parent_receipt_not_accepted
+
+escalate_reject_if_child_obligation_already_has_receipts
+
+escalate_reject_if_parent_already_terminated
+
+Idempotency
+
+escalate_idempotent_replay_ok (same receipt_id same body)
+
+escalate_collision_409 (same receipt_id different body)

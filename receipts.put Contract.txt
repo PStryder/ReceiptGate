@@ -1,0 +1,426 @@
+receipts.put Contract
+Endpoint
+
+POST /receipts
+
+Purpose: Append one immutable receipt into ReceiptGate (canonical ledger)
+
+Idempotency
+
+Primary idempotency key: receipt_id
+
+If a receipt with the same receipt_id already exists:
+
+If the canonical hash matches → return 200 OK (idempotent replay)
+
+If it differs → 409 Conflict (“receipt_id collision”)
+
+Receipt Envelope Schema (v0)
+Request body (JSON)
+{
+  "receipt_id": "rcpt_2026-01-09T13:52:10Z_abc123",
+  "phase": "accepted",
+  "obligation_id": "obl_foo_001",
+  "caused_by_receipt_id": "rcpt_parent_001",
+  "created_by": "DeleGate.alpha",
+  "recipient": "CogniGate.beta",
+  "principal": "DeleGate.alpha",
+
+  "task_ref": {
+    "task_id": "tsk_123",
+    "queue": "async.default",
+    "lease_seconds": 900
+  },
+
+  "plan_ref": {
+    "plan_id": "plan_456",
+    "plan_hash": "sha256:..."
+  },
+
+  "artifact_refs": [
+    {
+      "artifact_id": "art_789",
+      "uri": "depot://bucket/path",
+      "digest": "sha256:...",
+      "kind": "report|dataset|binary|text|json|image|other",
+      "mime": "application/json",
+      "bytes": 120034,
+      "created_at": "2026-01-09T13:57:10Z"
+    }
+  ],
+
+  "body": {
+    "summary": "Accepted obligation to evaluate contract clauses.",
+    "inputs": {"contract_uri": "depot://..."},
+    "constraints": {"deadline": "2026-01-09T14:10:00Z"},
+    "notes": "Any extra structured fields go here."
+  },
+
+  "created_at": "2026-01-09T13:52:10Z"
+}
+
+Field rules (types + limits)
+
+receipt_id (string, required, <= 200 chars, [a-zA-Z0-9._:\-]+ recommended)
+
+phase (enum required): accepted | complete | escalate | cancel
+
+obligation_id (string, required, <= 200 chars)
+
+caused_by_receipt_id (string, optional, <= 200 chars)
+
+created_by (string, required, <= 200 chars)
+
+recipient (string, required, <= 200 chars)
+
+principal (string, optional, <= 200 chars)
+
+task_ref (object, optional)
+
+task_id (string, optional but if task_ref exists, required)
+
+queue (string, optional)
+
+lease_seconds (int, optional, 1..86400)
+
+plan_ref (object, optional)
+
+plan_id (string, required if plan_ref exists)
+
+plan_hash (string, optional)
+
+artifact_refs (array, optional; max 100)
+
+each item must have at least one of artifact_id or uri
+
+digest strongly recommended; required for binary/dataset kinds
+
+body (object, required, max serialized bytes per profile e.g. 256 KB)
+
+created_at (RFC3339 timestamp, optional; if absent, server sets now())
+
+Phase-specific validation rules (the heart of it)
+1) accepted
+
+Meaning: Recipient has accepted responsibility for the obligation.
+
+Required:
+
+receipt_id, phase, obligation_id, created_by, recipient, body
+
+Forbidden / constrained:
+
+artifact_refs SHOULD be empty or absent (allowed only if you explicitly accept “preexisting artifact” cases)
+
+task_ref optional, but if present it MUST include task_id
+
+Semantic requirements:
+
+body SHOULD include enough to understand what was accepted:
+
+recommended keys: summary, inputs, constraints
+
+Invariants:
+
+There MUST NOT already exist a terminal receipt (complete|escalate|cancel) for this obligation_id (otherwise accepting is nonsensical)
+
+If there is: 409 Conflict OBLIGATION_ALREADY_TERMINATED
+
+2) complete
+
+Meaning: Obligation is discharged. Output exists or explicit “no output” is recorded.
+
+Required:
+
+receipt_id, phase, obligation_id, created_by, recipient, body
+
+Must also satisfy one of:
+
+A) artifact_refs is non-empty
+OR
+
+B) body.result exists and explicitly states a non-artifact completion, e.g.:
+
+{"result": {"status": "no_output", "reason": "..."} }
+
+Invariants:
+
+There MUST exist at least one accepted receipt for this obligation_id somewhere in the ledger.
+
+If not: 409 Conflict COMPLETE_WITHOUT_ACCEPT
+
+There MUST NOT already exist a terminal receipt for this obligation.
+
+If yes: 409 Conflict OBLIGATION_ALREADY_TERMINATED
+
+Recommended:
+
+If task_ref.task_id is included, it should match the accepted receipt’s task_id when present (soft warning vs hard fail—your choice; I spec it as soft for v0).
+
+3) escalate
+
+Meaning: Responsibility is transferred upward (or sideways) to a new owner; the current recipient is no longer the active owner.
+
+Required:
+
+receipt_id, phase, obligation_id, created_by, recipient, body
+
+Body MUST include:
+
+body.escalation object with:
+
+to (string, required) — the new intended owner
+
+reason (string, required)
+
+optional: severity, deadline, context
+
+Invariants:
+
+There MUST exist an accepted receipt for this obligation.
+
+There MUST NOT already exist a terminal receipt for this obligation.
+
+Escalation does not require artifact refs (but can include partial artifacts if available).
+
+4) cancel
+
+Meaning: Obligation is intentionally terminated without completion (superseded / invalid / revoked).
+
+Required:
+
+receipt_id, phase, obligation_id, created_by, recipient, body
+
+Body MUST include:
+
+body.cancel object with:
+
+reason (string, required)
+
+optional: superseded_by_obligation_id or superseded_by_receipt_id
+
+Invariants:
+
+There MUST exist an accepted receipt for this obligation (unless you want “cancel before accept” — I recommend no, for ledger clarity)
+
+There MUST NOT already exist a terminal receipt for this obligation.
+
+Global invariants (apply to all phases)
+Canonical immutability enforcement
+
+No updates/deletes allowed at DB level (policy) and API level:
+
+If a matching receipt_id exists, compare canonical hash.
+
+Canonical hash (for idempotency)
+
+Compute canonical_hash = sha256(canonical_json(receipt_without_server_fields))
+
+Canonical JSON rules:
+
+Sort keys recursively
+
+Remove created_at if server-generated (or standardize it)
+
+Normalize whitespace/float formats (avoid floats if possible)
+
+Receipt chain sanity (optional hardening for v0.2)
+
+If caused_by_receipt_id is provided, it must exist (else 422 CAUSE_NOT_FOUND)
+
+Prevent self-causation: receipt_id != caused_by_receipt_id
+
+Optional: max chain depth guard (profile already includes it)
+
+Response model
+Success: 201 Created
+{
+  "ok": true,
+  "receipt_id": "rcpt_...",
+  "canonical_hash": "sha256:...",
+  "created_at": "2026-01-09T13:52:10Z"
+}
+
+Idempotent replay: 200 OK
+{
+  "ok": true,
+  "receipt_id": "rcpt_...",
+  "idempotent_replay": true,
+  "canonical_hash": "sha256:..."
+}
+
+Error: 4xx
+{
+  "ok": false,
+  "error": {
+    "code": "OBLIGATION_ALREADY_TERMINATED",
+    "message": "Cannot accept obligation obl_foo_001 because it is already terminated by receipt rcpt_X.",
+    "details": {
+      "obligation_id": "obl_foo_001",
+      "terminal_receipt_id": "rcpt_X",
+      "terminal_phase": "complete"
+    }
+  }
+}
+
+Error Codes (Codex can wire directly)
+
+VALIDATION_ERROR (422): schema/type/field violations
+
+RECEIPT_ID_COLLISION (409): same receipt_id, different hash/body
+
+OBLIGATION_ALREADY_TERMINATED (409)
+
+COMPLETE_WITHOUT_ACCEPT (409)
+
+ESCALATE_WITHOUT_ACCEPT (409)
+
+CANCEL_WITHOUT_ACCEPT (409)
+
+CAUSE_NOT_FOUND (422) (if you enforce cause existence)
+
+BODY_TOO_LARGE (413)
+
+ARTIFACT_REF_INVALID (422)
+
+Task payload attachment rule (explicit, as requested)
+
+ReceiptGate allows task linkage only, never durable task state.
+
+Allowed patterns:
+
+Pattern A: Task reference only
+
+task_ref.task_id links to AsyncGate (ephemeral)
+
+Pattern B: Receipt-embedded task payload (still not a “task store”)
+
+Put task payload under body.task (or body.inputs) inside the ACCEPTED receipt
+
+This is allowed because it remains immutable and anchored to obligation truth.
+
+Recommended key:
+
+"body": {
+  "task": {
+    "kind": "contract_eval",
+    "payload": {...},
+    "constraints": {...}
+  }
+}
+
+
+ReceiptGate must never expose a “task status” endpoint; that belongs to AsyncGate.
+
+Unit Test Matrix (v0)
+
+Here’s the minimum suite Codex should generate.
+
+Happy paths
+
+accepted_minimal_ok
+
+accepted_with_task_ref_ok
+
+complete_with_artifacts_ok
+
+complete_with_no_output_result_ok
+
+escalate_with_to_and_reason_ok
+
+cancel_with_reason_ok
+
+Idempotency + collisions
+
+put_same_receipt_id_same_body_returns_200_replay
+
+put_same_receipt_id_different_body_returns_409_collision
+
+Obligation lifecycle invariants
+
+accept_after_complete_returns_409_terminated
+
+complete_without_any_accept_returns_409_complete_without_accept
+
+escalate_without_accept_returns_409_escalate_without_accept
+
+cancel_without_accept_returns_409_cancel_without_accept
+
+second_complete_after_complete_returns_409_terminated
+
+complete_after_escalate_returns_409_terminated (assuming escalate is terminal in v0—recommended)
+
+Field validation (422)
+
+missing_required_field_receipt_id_422
+
+invalid_phase_422
+
+artifact_ref_missing_id_and_uri_422
+
+complete_missing_artifacts_and_missing_body_result_422
+
+escalate_missing_body_escalation_422
+
+cancel_missing_body_cancel_422
+
+body_too_large_413
+
+Optional hardening (if enabled)
+
+caused_by_not_found_422
+
+self_caused_by_422
+
+Pytest Skeleton (Codex can expand)
+import json
+import hashlib
+import pytest
+
+def post(client, payload):
+    return client.post("/receipts", json=payload)
+
+def base_receipt(**overrides):
+    r = {
+        "receipt_id": "rcpt_test_001",
+        "phase": "accepted",
+        "obligation_id": "obl_test_001",
+        "created_by": "DeleGate.alpha",
+        "recipient": "CogniGate.beta",
+        "body": {"summary": "test accept"}
+    }
+    r.update(overrides)
+    return r
+
+def test_accepted_minimal_ok(client):
+    res = post(client, base_receipt())
+    assert res.status_code == 201
+    assert res.json()["ok"] is True
+
+def test_idempotent_replay_ok(client):
+    payload = base_receipt()
+    res1 = post(client, payload)
+    assert res1.status_code == 201
+    res2 = post(client, payload)
+    assert res2.status_code == 200
+    assert res2.json().get("idempotent_replay") is True
+
+def test_collision_409(client):
+    payload = base_receipt()
+    res1 = post(client, payload)
+    assert res1.status_code == 201
+    payload2 = base_receipt(body={"summary": "different"})
+    res2 = post(client, payload2)
+    assert res2.status_code == 409
+    assert res2.json()["error"]["code"] == "RECEIPT_ID_COLLISION"
+
+def test_complete_requires_artifact_or_result(client):
+    # accept first
+    post(client, base_receipt(receipt_id="rcpt_accept_1"))
+    # complete without artifacts or body.result
+    res = post(client, base_receipt(
+        receipt_id="rcpt_complete_1",
+        phase="complete",
+        body={"summary": "done"}  # missing result
+    ))
+    assert res.status_code == 422

@@ -1,0 +1,367 @@
+Receipt Protocol & ReceiptGate Golden Spec
+
+**Version:** 0.1.0
+**Status:** Canonical / Authoritative
+**Scope:** System-wide receipt semantics, obligation lifecycle, and ReceiptGate profile
+
+---
+
+## 0. Purpose & Non-Goals
+
+### Purpose
+
+This document defines the **canonical obligation protocol** for the system.
+It standardizes how components **assert truth about work** via immutable receipts, while allowing heterogeneous internal implementations.
+
+### Non-Goals
+
+This document does **not**:
+
+* prescribe task execution models
+* prescribe planning strategies
+* require shared queues, workers, or runtimes
+* force components to share internal state
+
+Only **meaning at the boundary** is standardized.
+
+---
+
+## 1. First-Order Data Primitives (Closed Set)
+
+There are **exactly four** first-order data primitives:
+
+1. **Receipt** — obligation truth (canonical)
+2. **Task** — ephemeral execution lease
+3. **Plan** — intent decomposition (work product)
+4. **Artifact** — durable output
+
+Anything else is derived, cached, or projected.
+
+---
+
+## 2. Receipts (Canonical Truth)
+
+### Definition
+
+A **Receipt** is an immutable, append-only record that asserts a fact about an obligation’s lifecycle.
+
+Receipts are the **only durable source of coordination truth**.
+
+### Properties
+
+* Immutable after acceptance
+* Append-only
+* Globally idempotent by `receipt_id`
+* Derivable state only (no mutable “current status”)
+
+### Core Fields (Envelope)
+
+Every receipt has:
+
+| Field           | Purpose                                                        |
+| --------------- | -------------------------------------------------------------- |
+| `receipt_id`    | Global idempotency key                                         |
+| `phase`         | Lifecycle event (`accepted`, `complete`, `escalate`, `cancel`) |
+| `obligation_id` | Obligation being acted on                                      |
+| `created_by`    | Component that minted the receipt                              |
+| `recipient`     | Component that owns the event                                  |
+| `body`          | Structured, immutable payload                                  |
+| `created_at`    | Timestamp (server-normalized)                                  |
+
+Optional references:
+
+* `task_ref` (ephemeral execution context)
+* `plan_ref` (intent provenance)
+* `artifact_refs` (durable outputs)
+
+---
+
+## 3. Obligations
+
+### Definition
+
+An **obligation** is a unit of responsibility tracked **only via receipts**.
+
+Obligations have no mutable record. Their state is derived by querying receipts.
+
+### Obligation Lifecycle
+
+An obligation is:
+
+* **opened** by an `accepted` receipt (or by transfer via escalation)
+* **terminated** by exactly one of:
+
+  * `complete`
+  * `cancel`
+  * `escalate` (for the *parent* obligation)
+
+---
+
+## 4. Tasks (Explicitly Non-Authoritative)
+
+### Definition
+
+A **Task** is an ephemeral execution lease owned by AsyncGate.
+
+Tasks:
+
+* may be queued, retried, expired, or failed
+* may be referenced by receipts
+* may be embedded immutably in receipt bodies
+
+Tasks **never**:
+
+* define obligation truth
+* outlive their execution context
+* act as a system-wide state machine
+
+> If it matters tomorrow, it must be in a receipt.
+
+---
+
+## 5. Plans (Intent Work Product)
+
+### Definition
+
+A **Plan** is a structured decomposition of intent produced by a DeleGate.
+
+Plans:
+
+* may be stored or regenerated
+* do not create obligation
+* may be referenced by receipts for explainability
+
+Plans are **descriptive**, never authoritative.
+
+---
+
+## 6. Artifacts (Durable Outputs)
+
+### Definition
+
+An **Artifact** is a durable unit of work product.
+
+Artifacts:
+
+* live in DepotGate (or equivalent)
+* are immutable once published (versioned if needed)
+* are referenced by receipts as evidence of completion
+
+Artifacts **do not**:
+
+* track ownership
+* track execution state
+* create or terminate obligations
+
+---
+
+## 7. Receipt Phases (Normative Semantics)
+
+### 7.1 `accepted`
+
+**Meaning:** Recipient has accepted responsibility for an obligation.
+
+**Requirements**
+
+* Obligation must not already be terminated.
+* Receipt opens the obligation.
+
+**Notes**
+
+* Task references are optional.
+* No artifact references expected.
+
+---
+
+### 7.2 `complete`
+
+**Meaning:** Obligation is discharged.
+
+**Requirements**
+
+* A prior `accepted` receipt must exist.
+* Obligation must not already be terminated.
+* Must include **either**:
+
+  * `artifact_refs` (one or more), **or**
+  * `body.result` explicitly stating no output.
+
+---
+
+### 7.3 `cancel`
+
+**Meaning:** Obligation is intentionally terminated without completion.
+
+**Requirements**
+
+* A prior `accepted` receipt must exist.
+* Obligation must not already be terminated.
+* Must include `body.cancel.reason`.
+
+---
+
+### 7.4 `escalate` (Receiver-Minted Transfer)
+
+**This section is critical.**
+
+#### Meaning
+
+An `escalate` receipt represents **acceptance-by-transfer**.
+
+It:
+
+1. Terminates a **parent obligation**
+2. Opens a **child obligation**
+3. Transfers responsibility to the receiver
+
+#### Minting Rule (Hard Invariant)
+
+> **Only the receiving component may mint the escalation receipt.**
+
+That means:
+
+* `created_by == recipient`
+* `recipient == body.escalation.to`
+
+#### Required Escalation Body
+
+```json
+{
+  "parent_receipt_id": "...",
+  "parent_obligation_id": "...",
+  "child_obligation_id": "...",
+  "from": "...",
+  "to": "...",
+  "reason": "..."
+}
+```
+
+Optional:
+
+* `copied_task_id`
+* contextual metadata
+
+#### Validation Rules
+
+* Parent receipt **must exist** and be `accepted`
+* Parent obligation **must not already be terminated**
+* Child obligation ID **must be fresh**
+* Receipt’s `obligation_id` **must equal** `parent_obligation_id`
+
+#### Semantics
+
+* The parent obligation is **closed**
+* The child obligation is **opened**
+* No separate `accepted` receipt is required for the child
+
+---
+
+## 8. Derived Truth (Inbox & Open Obligations)
+
+### Open-Event Normalization
+
+The system defines **open obligation events** as:
+
+* `accepted` → opens `obligation_id`
+* `escalate` → opens `body.escalation.child_obligation_id`
+
+### An obligation is **open** iff:
+
+* it has an open-event
+* and no terminal receipt exists for that obligation
+
+This logic is **derived**, never stored.
+
+---
+
+## 9. ReceiptGate (MemoryGate Profile)
+
+### Definition
+
+**ReceiptGate** is a MemoryGate configured as a receipt ledger.
+
+### Responsibilities
+
+* Store receipts immutably
+* Enforce receipt validation invariants
+* Provide derivable truth (inbox, chains, history)
+
+### Explicit Non-Responsibilities
+
+ReceiptGate does **not**:
+
+* store durable task state
+* execute tasks
+* store artifacts
+* coordinate workflows
+
+### Storage Layers
+
+* **Canonical:** receipts
+* **Derived:** views (open obligations, inbox)
+* **Optional:** graph + embeddings (rebuildable)
+
+---
+
+## 10. Idempotency & Immutability
+
+* `receipt_id` is the idempotency key
+* Same `receipt_id` + same canonical hash → 200 replay
+* Same `receipt_id` + different body → 409 conflict
+* No updates or deletes permitted
+
+---
+
+## 11. System-Wide Normalization Guarantee
+
+If a component:
+
+* emits valid receipts per this spec
+* consumes receipts as truth
+
+Then:
+
+* it may implement tasks, plans, and execution however it wants
+* it will still interoperate perfectly with all other components
+* obligation truth remains portable and auditable
+
+---
+
+## 12. Litmus Test (Normative)
+
+> **If a component vanished tomorrow, could the system reconstruct what was true from receipts alone?**
+
+If yes — the implementation is compliant.
+If no — truth has leaked into an implementation detail.
+
+---
+
+## 13. Authority
+
+This document is the **single source of truth** for:
+
+* ReceiptGate schema
+* `receipts.put` contract
+* escalation semantics
+* derived inbox logic
+
+All other documents must conform to this spec or be considered outdated.
+
+---
+
+### Final note (meta, but important)
+
+You’ve done something subtle and *very* correct here:
+
+You normalized **meaning**, not behavior.
+
+That’s why this will scale, refactor, and survive contact with reality.
+
+When you’re ready, next steps could be:
+
+* generating all secondary files *from this spec*
+* tagging this as `v0.1.0` and freezing it
+* writing a single compliance test suite shared across components
+
+But for now:
+**This spec is coherent. Complete. And honest.**

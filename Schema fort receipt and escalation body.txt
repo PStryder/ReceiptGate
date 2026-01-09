@@ -1,0 +1,547 @@
+```yaml
+openapi: 3.1.0
+info:
+  title: ReceiptGate API
+  version: 0.1.0
+  description: >
+    ReceiptGate is a MemoryGate profile that stores immutable, append-only receipts as the
+    canonical obligation ledger. This spec defines the Receipt object and the receipts.put
+    endpoint validation rules, including receiver-minted escalation semantics.
+
+servers:
+  - url: http://localhost:8080
+
+paths:
+  /receipts:
+    post:
+      operationId: receipts.put
+      summary: Append a new receipt (immutable)
+      description: >
+        Appends a receipt to the canonical ledger. Idempotent on receipt_id when canonical_hash matches.
+        Receiver-minted escalation is enforced for phase=escalate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReceiptCreateRequest"
+      responses:
+        "201":
+          description: Receipt created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReceiptPutResponse"
+        "200":
+          description: Idempotent replay (same receipt_id + same canonical_hash)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReceiptPutResponse"
+        "409":
+          description: Conflict (id collision or obligation lifecycle conflict)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: Body too large
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    # -------------------------
+    # Top-level request/response
+    # -------------------------
+    ReceiptCreateRequest:
+      allOf:
+        - $ref: "#/components/schemas/ReceiptEnvelope"
+      unevaluatedProperties: false
+
+    ReceiptPutResponse:
+      type: object
+      required: [ok, receipt_id, canonical_hash]
+      properties:
+        ok:
+          type: boolean
+          const: true
+        receipt_id:
+          type: string
+        canonical_hash:
+          type: string
+          description: sha256 of canonicalized receipt (server rules)
+        created_at:
+          type: string
+          format: date-time
+        idempotent_replay:
+          type: boolean
+          default: false
+      additionalProperties: false
+
+    ErrorResponse:
+      type: object
+      required: [ok, error]
+      properties:
+        ok:
+          type: boolean
+          const: false
+        error:
+          $ref: "#/components/schemas/ErrorObject"
+      additionalProperties: false
+
+    ErrorObject:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - VALIDATION_ERROR
+            - RECEIPT_ID_COLLISION
+            - OBLIGATION_ALREADY_TERMINATED
+            - COMPLETE_WITHOUT_ACCEPT
+            - ESCALATE_PARENT_INVALID
+            - CHILD_OBLIGATION_ALREADY_EXISTS
+            - CANCEL_WITHOUT_ACCEPT
+            - BODY_TOO_LARGE
+            - ARTIFACT_REF_INVALID
+            - CAUSE_NOT_FOUND
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+      additionalProperties: false
+
+    # -------------------------
+    # Receipt object model
+    # -------------------------
+    ReceiptEnvelope:
+      type: object
+      description: Canonical receipt envelope. Immutable once stored.
+      required:
+        - receipt_id
+        - phase
+        - obligation_id
+        - created_by
+        - recipient
+        - body
+      properties:
+        receipt_id:
+          type: string
+          maxLength: 200
+          pattern: "^[a-zA-Z0-9._:\\-]+$"
+          description: Globally unique receipt identifier (idempotency key).
+        phase:
+          type: string
+          enum: [accepted, complete, escalate, cancel]
+        obligation_id:
+          type: string
+          maxLength: 200
+        caused_by_receipt_id:
+          type: string
+          maxLength: 200
+          nullable: true
+        created_by:
+          type: string
+          maxLength: 200
+          description: Component/agent that minted the receipt.
+        recipient:
+          type: string
+          maxLength: 200
+          description: Component/agent that is the owner/actor for this receipt event.
+        principal:
+          type: string
+          maxLength: 200
+          nullable: true
+          description: Optional ultimate principal (e.g., top-level DeleGate/user).
+        task_ref:
+          $ref: "#/components/schemas/TaskRef"
+        plan_ref:
+          $ref: "#/components/schemas/PlanRef"
+        artifact_refs:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/ArtifactRef"
+        body:
+          $ref: "#/components/schemas/ReceiptBody"
+        created_at:
+          type: string
+          format: date-time
+          description: Client-supplied timestamp (server may override/normalize).
+      additionalProperties: false
+
+    TaskRef:
+      type: object
+      nullable: true
+      description: Reference to AsyncGate task context (ephemeral). Not authoritative task state.
+      required: [task_id]
+      properties:
+        task_id:
+          type: string
+          maxLength: 200
+        queue:
+          type: string
+          maxLength: 200
+          nullable: true
+        lease_seconds:
+          type: integer
+          minimum: 1
+          maximum: 86400
+          nullable: true
+      additionalProperties: false
+
+    PlanRef:
+      type: object
+      nullable: true
+      required: [plan_id]
+      properties:
+        plan_id:
+          type: string
+          maxLength: 200
+        plan_hash:
+          type: string
+          maxLength: 200
+          nullable: true
+          description: Optional digest (sha256:...) for plan integrity.
+      additionalProperties: false
+
+    ArtifactRef:
+      type: object
+      description: Reference to DepotGate artifact (durable output). Not stored in ReceiptGate.
+      properties:
+        artifact_id:
+          type: string
+          maxLength: 200
+          nullable: true
+        uri:
+          type: string
+          maxLength: 2048
+          nullable: true
+        digest:
+          type: string
+          maxLength: 200
+          nullable: true
+          description: Recommended; required for binary/dataset kinds by validation.
+        kind:
+          type: string
+          enum: [report, dataset, binary, text, json, image, other]
+          nullable: true
+        mime:
+          type: string
+          maxLength: 200
+          nullable: true
+        bytes:
+          type: integer
+          minimum: 0
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+      additionalProperties: false
+      anyOf:
+        - required: [artifact_id]
+        - required: [uri]
+
+    # -------------------------
+    # Receipt body (polymorphic by phase)
+    # -------------------------
+    ReceiptBody:
+      type: object
+      description: >
+        Structured receipt body. Validation rules depend on phase (see Receipt polymorphism below).
+        Unknown keys are allowed here to support extensibility, but size limits apply at profile level.
+      additionalProperties: true
+      properties:
+        summary:
+          type: string
+          maxLength: 2000
+        inputs:
+          type: object
+          additionalProperties: true
+        constraints:
+          type: object
+          additionalProperties: true
+        result:
+          $ref: "#/components/schemas/CompletionResult"
+        escalation:
+          $ref: "#/components/schemas/EscalationBody"
+        cancel:
+          $ref: "#/components/schemas/CancelBody"
+
+    CompletionResult:
+      type: object
+      nullable: true
+      description: Used when complete has no artifact_refs or to add structured outcome info.
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, no_output, partial, failed]
+        reason:
+          type: string
+          maxLength: 5000
+          nullable: true
+        metrics:
+          type: object
+          nullable: true
+          additionalProperties: true
+      additionalProperties: false
+
+    EscalationBody:
+      type: object
+      description: >
+        Receiver-minted escalation: the receiver (to) mints the receipt, terminates parent obligation,
+        and opens child obligation by transfer.
+      required:
+        - parent_receipt_id
+        - parent_obligation_id
+        - child_obligation_id
+        - from
+        - to
+        - reason
+      properties:
+        parent_receipt_id:
+          type: string
+          maxLength: 200
+        parent_obligation_id:
+          type: string
+          maxLength: 200
+        child_obligation_id:
+          type: string
+          maxLength: 200
+        from:
+          type: string
+          maxLength: 200
+        to:
+          type: string
+          maxLength: 200
+        reason:
+          type: string
+          maxLength: 5000
+        copied_task_id:
+          type: string
+          maxLength: 200
+          nullable: true
+        context:
+          type: object
+          nullable: true
+          additionalProperties: true
+      additionalProperties: false
+
+    CancelBody:
+      type: object
+      description: Cancellation termination without completion.
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          maxLength: 5000
+        superseded_by_obligation_id:
+          type: string
+          maxLength: 200
+          nullable: true
+        superseded_by_receipt_id:
+          type: string
+          maxLength: 200
+          nullable: true
+      additionalProperties: false
+
+    # -------------------------
+    # Polymorphic validation by phase (Codex should enforce in handler)
+    # -------------------------
+    ReceiptCreatePolymorphic:
+      oneOf:
+        - $ref: "#/components/schemas/ReceiptAccepted"
+        - $ref: "#/components/schemas/ReceiptComplete"
+        - $ref: "#/components/schemas/ReceiptEscalate"
+        - $ref: "#/components/schemas/ReceiptCancel"
+      discriminator:
+        propertyName: phase
+        mapping:
+          accepted: "#/components/schemas/ReceiptAccepted"
+          complete: "#/components/schemas/ReceiptComplete"
+          escalate: "#/components/schemas/ReceiptEscalate"
+          cancel: "#/components/schemas/ReceiptCancel"
+
+    ReceiptAccepted:
+      allOf:
+        - $ref: "#/components/schemas/ReceiptEnvelope"
+        - type: object
+          properties:
+            phase:
+              const: accepted
+          required: [phase]
+      description: Acceptance creates/claims responsibility for obligation_id.
+      # Additional semantic rules enforced in code (db-aware):
+      # - obligation_id must not already be terminated (complete/escalate/cancel exists)
+
+    ReceiptComplete:
+      allOf:
+        - $ref: "#/components/schemas/ReceiptEnvelope"
+        - type: object
+          properties:
+            phase:
+              const: complete
+          required: [phase]
+      description: Completion discharges obligation_id.
+      # Additional semantic rules enforced in code:
+      # - must have prior accepted for obligation_id
+      # - must NOT already be terminated
+      # - must include artifact_refs OR body.result.status=no_output|partial|failed with reason
+
+    ReceiptEscalate:
+      allOf:
+        - $ref: "#/components/schemas/ReceiptEnvelope"
+        - type: object
+          properties:
+            phase:
+              const: escalate
+            body:
+              type: object
+              required: [escalation]
+              properties:
+                escalation:
+                  $ref: "#/components/schemas/EscalationBody"
+          required: [phase, body]
+      description: >
+        Receiver-minted escalation. Terminates parent obligation and opens child obligation by transfer.
+      # Additional semantic rules enforced in code (db-aware + field coherence):
+      # - created_by MUST equal recipient
+      # - recipient MUST equal body.escalation.to
+      # - parent_receipt_id must exist AND be phase=accepted AND match parent_obligation_id
+      # - parent_obligation_id must NOT already be terminated
+      # - child_obligation_id must be fresh (no prior receipts), unless idempotent replay
+      # - (optional) caused_by_receipt_id should equal parent_receipt_id (recommended)
+
+    ReceiptCancel:
+      allOf:
+        - $ref: "#/components/schemas/ReceiptEnvelope"
+        - type: object
+          properties:
+            phase:
+              const: cancel
+            body:
+              type: object
+              required: [cancel]
+              properties:
+                cancel:
+                  $ref: "#/components/schemas/CancelBody"
+          required: [phase, body]
+      description: Cancellation terminates obligation_id without completion.
+      # Additional semantic rules enforced in code:
+      # - must have prior accepted for obligation_id (recommended strict)
+      # - must NOT already be terminated
+```
+
+### How Codex should use this (implementation notes, not “optional”)
+
+1. **Use `ReceiptCreatePolymorphic`** as the request validator (phase-discriminated).
+2. Then run **DB-aware invariants** in the handler (because OpenAPI can’t check “parent receipt exists”).
+3. Enforce receiver-minted escalation with these hard checks:
+
+   * `phase == "escalate"`
+   * `created_by == recipient`
+   * `recipient == body.escalation.to`
+
+---
+
+## DB-aware invariant pseudocode (Codex can turn into handler + tests)
+
+```python
+def validate_put_receipt(r):
+    # 1) basic schema already validated via OpenAPI / pydantic / jsonschema
+
+    # 2) idempotency collision check by receipt_id
+    existing = db.get_receipt_by_receipt_id(r.receipt_id)
+    if existing:
+        if existing.canonical_hash == canonical_hash(r):
+            return OK_IDEMPOTENT_REPLAY
+        raise Conflict("RECEIPT_ID_COLLISION", ...)
+
+    # 3) phase-specific ledger invariants
+    if r.phase == "accepted":
+        if db.exists_terminal_for_obligation(r.obligation_id):
+            raise Conflict("OBLIGATION_ALREADY_TERMINATED", ...)
+
+    elif r.phase == "complete":
+        if not db.exists_accept_for_obligation(r.obligation_id):
+            raise Conflict("COMPLETE_WITHOUT_ACCEPT", ...)
+        if db.exists_terminal_for_obligation(r.obligation_id):
+            raise Conflict("OBLIGATION_ALREADY_TERMINATED", ...)
+        if not (r.artifact_refs and len(r.artifact_refs) > 0) and not (r.body.get("result")):
+            raise Validation("VALIDATION_ERROR", "complete requires artifact_refs or body.result", ...)
+
+    elif r.phase == "cancel":
+        if not db.exists_accept_for_obligation(r.obligation_id):
+            raise Conflict("CANCEL_WITHOUT_ACCEPT", ...)
+        if db.exists_terminal_for_obligation(r.obligation_id):
+            raise Conflict("OBLIGATION_ALREADY_TERMINATED", ...)
+
+    elif r.phase == "escalate":
+        esc = r.body["escalation"]
+
+        # receiver-minted checks
+        if r.created_by != r.recipient:
+            raise Validation("VALIDATION_ERROR", "escalate must be minted by receiver (created_by==recipient)", ...)
+        if r.recipient != esc["to"]:
+            raise Validation("VALIDATION_ERROR", "recipient must equal escalation.to", ...)
+
+        # parent coherence
+        parent = db.get_receipt_by_receipt_id(esc["parent_receipt_id"])
+        if not parent or parent.phase != "accepted":
+            raise Conflict("ESCALATE_PARENT_INVALID", ...)
+        if parent.obligation_id != esc["parent_obligation_id"]:
+            raise Conflict("ESCALATE_PARENT_INVALID", ...)
+
+        # parent not already terminated
+        if db.exists_terminal_for_obligation(esc["parent_obligation_id"]):
+            raise Conflict("OBLIGATION_ALREADY_TERMINATED", ...)
+
+        # child must be fresh
+        if db.exists_any_for_obligation(esc["child_obligation_id"]):
+            raise Conflict("CHILD_OBLIGATION_ALREADY_EXISTS", ...)
+
+        # (recommended) If obligation_id present, it should be parent_obligation_id OR child_obligation_id?
+        # Choose the canonical mapping:
+        # - receipt.obligation_id == parent_obligation_id (terminating event)
+        if r.obligation_id != esc["parent_obligation_id"]:
+            raise Validation("VALIDATION_ERROR", "escalate receipt.obligation_id must equal escalation.parent_obligation_id", ...)
+```
+
+### Canonical mapping choice (important, and I’ve made it explicit)
+
+For `phase=escalate`:
+
+* `receipt.obligation_id` **MUST equal** `body.escalation.parent_obligation_id`
+  (because it’s the terminal event for the parent)
+* The child is introduced via `body.escalation.child_obligation_id` and treated as an open-event in derived views.
+
+That keeps the ledger query logic sane.
+
+---
+
+## Extra: tighten artifact ref validation (Codex-friendly)
+
+In handler, enforce:
+
+* For each artifact ref:
+
+  * must have `artifact_id` OR `uri`
+  * if `kind in ("binary","dataset")` then `digest` required
+  * if `bytes` present, must be >=0
+
+---
+
+

@@ -1,0 +1,367 @@
+ReceiptGate Reference Profile (for MemoryGate)
+Goals (non-negotiable)
+
+ReceiptGate is a MemoryGate configured to be a receipt ledger.
+
+Receipts are canonical, immutable, append-only.
+
+No durable task store. Tasks remain ephemeral (AsyncGate) and/or embedded/pointered via receipts.
+
+Artifacts are referenced (by ID/URI/digest) but not stored here.
+
+Plans may be stored optionally (I include a toggle), but ReceiptGate’s mission is receipts.
+
+File Tree Codex should generate
+memorygate/
+  profiles/
+    receiptgate/
+      README.md
+      profile.yaml
+      policy.md
+      schema/
+        001_receipts.sql
+        002_receipt_views.sql
+        003_receipt_graph.sql
+        004_receipt_embeddings.sql
+      jobs/
+        build_receipt_graph.py
+        build_receipt_embeddings.py
+      api/
+        namespaces.yaml
+        examples.http
+
+
+If your repo uses a different layout (configs/, migrations/, etc.), keep the same content and translate the paths.
+
+profile.yaml (the actual “this is ReceiptGate” switch)
+profile:
+  name: receiptgate
+  kind: memorygate_profile
+  version: 0.1.0
+  description: >
+    ReceiptGate is a specialized MemoryGate profile optimized for durable receipt storage
+    and obligation truth derivation. Append-only receipts are canonical. Tasks are not
+    stored durably here. Artifacts are referenced only.
+
+storage:
+  canonical_layer:
+    enabled: true
+    tables:
+      - receipts
+      - receipt_bodies               # optional split for large bodies; can be inline JSONB instead
+  graph_layer:
+    enabled: true
+    tables:
+      - receipt_edges
+      - receipt_nodes                # optional; can be a view over receipts
+  semantic_layer:
+    enabled: true
+    provider: openai
+    model: text-embedding-3-small
+    dimensions: 1536
+    tables:
+      - receipt_embeddings
+
+constraints:
+  immutability:
+    receipts_append_only: true
+    forbid_update_delete: true
+  tasks:
+    durable_task_store: false        # explicit: no tasks table, no task state truth
+  artifacts:
+    store_artifacts: false
+    allow_artifact_references: true
+  plans:
+    store_plans: false              # flip to true if you want receiptgate to keep plans too
+
+limits:
+  receipt_body_max_bytes: 262144     # 256 KB; tune as needed
+  receipt_chain_max_depth: 2048
+  search_default_limit: 50
+  search_max_limit: 500
+
+api:
+  namespace_prefix: receipts
+  enabled_namespaces:
+    - receipts.put
+    - receipts.get
+    - receipts.search
+    - receipts.chain
+    - receipts.inbox
+    - receipts.stats
+    - health.get
+  disabled_namespaces:
+    - memory.put
+    - memory.search
+    - sessions.*                     # if you don’t want session semantics here
+    - artifacts.*                    # ReceiptGate never stores artifacts
+
+retention:
+  receipts:
+    ttl_days: null                   # null = retain indefinitely
+  embeddings:
+    ttl_days: null
+  graph:
+    ttl_days: null
+
+observability:
+  metrics:
+    - receipts_ingested_total
+    - receipts_query_total
+    - receipts_chain_traversals_total
+    - receipt_graph_build_seconds
+    - receipt_embedding_build_seconds
+  logging:
+    log_receipt_bodies: false        # avoid leaking payloads in logs
+
+schema/001_receipts.sql (canonical ledger)
+
+This is the minimal receipts schema to support chaining, inboxing, and references to plans/tasks/artifacts without storing tasks/artifacts as first-class rows.
+
+-- 001_receipts.sql
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS receipts (
+  uuid UUID PRIMARY KEY,
+  receipt_id TEXT NOT NULL UNIQUE,
+
+  -- phases are termination semantics and obligation lifecycle markers
+  phase TEXT NOT NULL CHECK (phase IN ('accepted', 'complete', 'escalate', 'cancel')),
+
+  -- obligation identity and lineage
+  obligation_id TEXT NOT NULL,
+  caused_by_receipt_id TEXT NULL,
+
+  -- actor fields
+  created_by TEXT NOT NULL,          -- who minted this receipt (service/agent)
+  recipient TEXT NOT NULL,           -- who accepted / completed / escalated (service/agent)
+  principal TEXT NULL,               -- optional: who ultimately owns the intent (top delegate / user)
+
+  -- execution reference (ephemeral in AsyncGate; here only as reference)
+  task_id TEXT NULL,
+
+  -- intent / work product references
+  plan_id TEXT NULL,                 -- optional reference only
+  artifact_refs JSONB NULL,          -- array of {artifact_id|uri, digest, kind, bytes, mime, created_at}
+
+  -- receipt body: immutable, canonical
+  body JSONB NOT NULL,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Fast chain traversal
+CREATE INDEX IF NOT EXISTS idx_receipts_caused_by
+  ON receipts (caused_by_receipt_id);
+
+-- Inbox queries: "what do I owe?"
+CREATE INDEX IF NOT EXISTS idx_receipts_inbox_open
+  ON receipts (recipient, phase, created_at);
+
+-- Obligation rollups
+CREATE INDEX IF NOT EXISTS idx_receipts_obligation
+  ON receipts (obligation_id, created_at);
+
+COMMIT;
+
+
+Notes:
+
+obligation_id lets you group related receipts even if chain edges are missing or if you want fan-in/fan-out.
+
+artifact_refs is only references (DepotGate owns artifact storage).
+
+task_id is reference only (AsyncGate owns task lifecycle).
+
+schema/002_receipt_views.sql (derived truth = “what’s open?”)
+
+These are views, not mutable tables. ReceiptGate stays pure.
+
+-- 002_receipt_views.sql
+BEGIN;
+
+-- Open obligations: accepted receipts that are not yet discharged by a terminal receipt
+CREATE OR REPLACE VIEW v_open_obligations AS
+SELECT r.*
+FROM receipts r
+WHERE r.phase = 'accepted'
+AND NOT EXISTS (
+  SELECT 1 FROM receipts t
+  WHERE t.obligation_id = r.obligation_id
+    AND t.phase IN ('complete', 'escalate', 'cancel')
+);
+
+-- Inbox: open obligations per recipient
+CREATE OR REPLACE VIEW v_inbox AS
+SELECT *
+FROM v_open_obligations;
+
+COMMIT;
+
+
+If you have fancier semantics (e.g., “complete must reference the accepted receipt”), you can tighten this later. This is enough for v0 truth derivation.
+
+schema/003_receipt_graph.sql (optional materialized edges)
+
+If you want speed for chain traversal and graph queries, you can materialize edges; still derived.
+
+-- 003_receipt_graph.sql
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS receipt_edges (
+  from_receipt_id TEXT NOT NULL,
+  to_receipt_id   TEXT NOT NULL,
+  edge_type TEXT NOT NULL CHECK (edge_type IN ('caused_by')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (from_receipt_id, to_receipt_id, edge_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_receipt_edges_to
+  ON receipt_edges (to_receipt_id);
+
+COMMIT;
+
+schema/004_receipt_embeddings.sql (semantic layer)
+-- 004_receipt_embeddings.sql
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS receipt_embeddings (
+  receipt_id TEXT PRIMARY KEY REFERENCES receipts(receipt_id) ON DELETE CASCADE,
+  model TEXT NOT NULL,
+  dims INT NOT NULL,
+  embedding VECTOR(1536) NOT NULL,
+  content_hash TEXT NOT NULL,        -- to detect body changes (should never happen)
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Optional: vector index (pgvector)
+-- CREATE INDEX IF NOT EXISTS idx_receipt_embeddings_vec
+--   ON receipt_embeddings USING ivfflat (embedding vector_l2_ops);
+
+COMMIT;
+
+jobs/build_receipt_graph.py (derived layer builder)
+"""
+Builds receipt_edges from receipts.caused_by_receipt_id.
+Idempotent: rebuildable from canon.
+"""
+import os
+import psycopg
+
+EDGE_TYPE = "caused_by"
+
+SQL_CLEAR = "DELETE FROM receipt_edges WHERE edge_type = %s;"
+SQL_INSERT = """
+INSERT INTO receipt_edges (from_receipt_id, to_receipt_id, edge_type)
+SELECT receipt_id, caused_by_receipt_id, %s
+FROM receipts
+WHERE caused_by_receipt_id IS NOT NULL
+ON CONFLICT DO NOTHING;
+"""
+
+def main():
+    dsn = os.environ["DATABASE_URL"]
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(SQL_CLEAR, (EDGE_TYPE,))
+            cur.execute(SQL_INSERT, (EDGE_TYPE,))
+        conn.commit()
+
+if __name__ == "__main__":
+    main()
+
+api/namespaces.yaml (what ReceiptGate exposes)
+
+This is the guardrail that prevents ReceiptGate from quietly becoming “MemoryGate-but-with-everything-enabled”.
+
+namespaces:
+  receipts.put:
+    method: POST
+    path: /receipts
+    description: Append a new receipt (immutable). Validates phase and required fields.
+
+  receipts.get:
+    method: GET
+    path: /receipts/{receipt_id}
+    description: Fetch a single receipt by id.
+
+  receipts.search:
+    method: POST
+    path: /receipts/search
+    description: Query receipts by actor/phase/obligation/time + optional text search over body.
+
+  receipts.chain:
+    method: GET
+    path: /receipts/{receipt_id}/chain
+    description: Traverse caused_by lineage and return ordered chain.
+
+  receipts.inbox:
+    method: GET
+    path: /inbox/{recipient}
+    description: Return open obligations for recipient (derived from receipt truth).
+
+  receipts.stats:
+    method: GET
+    path: /receipts/stats
+    description: Counts, phases, top recipients, ingestion rate.
+
+  health.get:
+    method: GET
+    path: /health
+    description: Liveness/readiness.
+
+policy.md (ReceiptGate behavioral contract)
+# ReceiptGate Policy
+
+ReceiptGate is a MemoryGate profile acting as the canonical receipt ledger.
+
+## Canonical Truth
+- Receipts are append-only and immutable.
+- Obligation truth is derived from receipts alone.
+- Derived layers (graph/embeddings) must be rebuildable from canonical receipts.
+
+## Explicit Non-Responsibilities
+- ReceiptGate does not execute tasks.
+- ReceiptGate does not route work.
+- ReceiptGate does not push notifications.
+- ReceiptGate does not store durable task state.
+- ReceiptGate does not store artifacts (only references).
+
+## Allowed References
+- `task_id` may be present as a reference to AsyncGate execution context.
+- `artifact_refs` may be present as references to DepotGate outputs.
+- `plan_id` may be referenced, but storing Plans is profile-configurable.
+
+README.md (profile intent for humans + Codex)
+
+Include:
+
+what it is
+
+what it is not
+
+how to run migrations
+
+how to run graph/embedding jobs
+
+expected environment variables
+
+# ReceiptGate (MemoryGate Profile)
+
+ReceiptGate is a specialized MemoryGate profile configured to store receipts as the canonical obligation ledger.
+
+## What it stores
+- Receipts (immutable, append-only)
+
+## What it does NOT store
+- Durable task state (tasks remain ephemeral and are owned by AsyncGate)
+- Artifacts (owned by DepotGate; only references are stored here)
+
+## Setup
+1. Apply schema migrations in `schema/`
+2. Optionally run `jobs/build_receipt_graph.py`
+3. Optionally run `jobs/build_receipt_embeddings.py`
+
+## Env
+- DATABASE_URL
+- (optional) OPENAI_API_KEY for embeddings
