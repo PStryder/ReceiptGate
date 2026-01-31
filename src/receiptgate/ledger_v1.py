@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -10,6 +11,8 @@ from uuid import uuid4
 from sqlalchemy import bindparam, text
 
 from receiptgate.validation_v1 import TERMINAL_PHASES
+
+logger = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
@@ -55,6 +58,16 @@ def store_receipt(db, payload: dict[str, Any], tenant_id: str) -> dict[str, Any]
     except Exception:
         db.rollback()
         raise
+
+    logger.info(
+        "receiptgate_v1_receipt_stored",
+        receipt_id=receipt_id,
+        tenant_id=tenant_id,
+        task_id=record.get("task_id"),
+        phase=record.get("phase"),
+        recipient_ai=record.get("recipient_ai"),
+        caused_by_receipt_id=record.get("caused_by_receipt_id"),
+    )
 
     return {"receipt_id": receipt_id, "stored_at": stored_at, "tenant_id": tenant_id}
 
