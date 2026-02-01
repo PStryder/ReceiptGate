@@ -1,0 +1,77 @@
+profile:
+  name: receiptgate
+  kind: memorygate_profile
+  version: 0.1.0
+  description: >
+    ReceiptGate is a specialized MemoryGate profile optimized for durable receipt storage
+    and obligation truth derivation. Append-only receipts are canonical. Tasks are not
+    stored durably here. Artifacts are referenced only.
+
+storage:
+  canonical_layer:
+    enabled: true
+    tables:
+      - receipts
+  graph_layer:
+    enabled: true
+    tables:
+      - receipt_edges
+  semantic_layer:
+    enabled: false
+    provider: openai
+    model: text-embedding-3-small
+    dimensions: 1536
+    tables:
+      - receipt_embeddings
+
+constraints:
+  immutability:
+    receipts_append_only: true
+    forbid_update_delete: true
+  tasks:
+    durable_task_store: false
+  artifacts:
+    store_artifacts: false
+    allow_artifact_references: true
+  plans:
+    store_plans: false
+
+limits:
+  receipt_body_max_bytes: 262144
+  receipt_chain_max_depth: 2048
+  search_default_limit: 50
+  search_max_limit: 500
+
+api:
+  namespace_prefix: receipts
+  enabled_namespaces:
+    - receipts.put
+    - receipts.get
+    - receipts.search
+    - receipts.chain
+    - receipts.inbox
+    - receipts.stats
+    - health.get
+  disabled_namespaces:
+    - memory.put
+    - memory.search
+    - sessions.*
+    - artifacts.*
+
+retention:
+  receipts:
+    ttl_days: null
+  embeddings:
+    ttl_days: null
+  graph:
+    ttl_days: null
+
+observability:
+  metrics:
+    - receipts_ingested_total
+    - receipts_query_total
+    - receipts_chain_traversals_total
+    - receipt_graph_build_seconds
+    - receipt_embedding_build_seconds
+  logging:
+    log_receipt_bodies: false

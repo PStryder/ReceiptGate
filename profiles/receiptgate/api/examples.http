@@ -1,0 +1,38 @@
+### Put receipt (accepted)
+POST http://localhost:8000/receipts
+X-API-Key: rg_change_me
+Content-Type: application/json
+
+{
+  "receipt_id": "rcpt_2026-01-09T13:52:10Z_abc123",
+  "phase": "accepted",
+  "obligation_id": "obl_demo_001",
+  "created_by": "DeleGate.alpha",
+  "recipient": "CogniGate.beta",
+  "body": {
+    "summary": "Accepted obligation to evaluate contract clauses."
+  }
+}
+
+### Get receipt
+GET http://localhost:8000/receipts/rcpt_2026-01-09T13:52:10Z_abc123
+X-API-Key: rg_change_me
+
+### Search receipts
+POST http://localhost:8000/receipts/search
+X-API-Key: rg_change_me
+Content-Type: application/json
+
+{
+  "recipient": "CogniGate.beta",
+  "phase": "accepted",
+  "limit": 25
+}
+
+### Receipt chain
+GET http://localhost:8000/receipts/rcpt_2026-01-09T13:52:10Z_abc123/chain
+X-API-Key: rg_change_me
+
+### Inbox
+GET http://localhost:8000/inbox/CogniGate.beta
+X-API-Key: rg_change_me

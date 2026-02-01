@@ -1,0 +1,35 @@
+namespaces:
+  receipts.put:
+    method: POST
+    path: /receipts
+    description: Append a new receipt (immutable). Validates phase and required fields.
+
+  receipts.get:
+    method: GET
+    path: /receipts/{receipt_id}
+    description: Fetch a single receipt by id.
+
+  receipts.search:
+    method: POST
+    path: /receipts/search
+    description: Query receipts by actor/phase/obligation/time + optional text search over body.
+
+  receipts.chain:
+    method: GET
+    path: /receipts/{receipt_id}/chain
+    description: Traverse caused_by lineage and return ordered chain.
+
+  receipts.inbox:
+    method: GET
+    path: /inbox/{recipient}
+    description: Return open obligations for recipient (derived from receipt truth).
+
+  receipts.stats:
+    method: GET
+    path: /receipts/stats
+    description: Counts, phases, top recipients, ingestion rate.
+
+  health.get:
+    method: GET
+    path: /health
+    description: Liveness/readiness.
