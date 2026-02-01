@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 
-@dataclass(frozen=True)
+@dataclass
 class ReceiptGateError(Exception):
     status_code: int
     code: str

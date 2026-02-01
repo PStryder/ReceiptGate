@@ -34,7 +34,11 @@ router = APIRouter()
 @router.post(
     "/receipts",
     response_model=ReceiptPutResponse,
-    responses={200: {"model": ReceiptPutResponse}},
+    responses={
+        200: {"model": ReceiptPutResponse},
+        201: {"model": ReceiptPutResponse},
+        409: {"model": ReceiptPutResponse},
+    },
 )
 def receipts_put(
     receipt: ReceiptCreateRequest,
@@ -42,9 +46,7 @@ def receipts_put(
     _auth: bool = Depends(verify_api_key),
 ):
     response, status_code = put_receipt(db, receipt)
-    if status_code == 200:
-        return JSONResponse(status_code=200, content=response.model_dump(mode="json"))
-    return response
+    return JSONResponse(status_code=status_code, content=response.model_dump(mode="json"))
 
 
 @router.get("/receipts/{receipt_id}", response_model=ReceiptRecord)
