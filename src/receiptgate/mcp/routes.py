@@ -12,12 +12,13 @@ from receiptgate.auth import verify_api_key
 from receiptgate.config import receiptgate_clock, settings
 from receiptgate.db import get_db_session
 from receiptgate.ledger_v1 import (
+    ReceiptConflictError,
     get_receipt,
     get_receipt_chain,
     list_inbox,
     list_task_receipts,
+    put_receipt,
     search_receipts,
-    store_receipt,
 )
 from receiptgate.validation_v1 import apply_server_fields, validate_receipt_payload
 
@@ -172,13 +173,32 @@ async def mcp_entry(request: MCPRequest, http_request: Request):
 
         if tool_name == "receiptgate.submit_receipt":
             receipt = arguments.get("receipt") or {}
-            errors = validate_receipt_payload(receipt)
+            stored_at = receiptgate_clock()
+            payload = apply_server_fields(receipt, tenant_id=tenant_id, stored_at=stored_at)
+            errors = validate_receipt_payload(payload)
             if errors:
                 return _jsonrpc_error(request.id, "validation_failed", "Receipt validation failed", errors)
 
-            stored_at = receiptgate_clock()
-            payload = apply_server_fields(receipt, tenant_id=tenant_id, stored_at=stored_at)
-            result = store_receipt(db, payload, tenant_id)
+            try:
+                result = put_receipt(db, payload, tenant_id)
+            except ReceiptConflictError as exc:
+                return _jsonrpc_error(
+                    request.id,
+                    "RECEIPT_ID_COLLISION",
+                    "receipt_id collision with different canonical hash",
+                    {
+                        "receipt_id": exc.receipt_id,
+                        "existing_hash": exc.existing_hash,
+                        "incoming_hash": exc.incoming_hash,
+                    },
+                )
+            except Exception as exc:
+                return _jsonrpc_error(
+                    request.id,
+                    "receiptgate_error",
+                    "Failed to store receipt",
+                    {"error": str(exc)},
+                )
             return _jsonrpc_result(request.id, result)
 
         if tool_name == "receiptgate.list_inbox":

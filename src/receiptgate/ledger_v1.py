@@ -9,14 +9,38 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import bindparam, text
+from sqlalchemy.exc import IntegrityError
 
 from receiptgate.validation_v1 import TERMINAL_PHASES
+from receiptgate.utils import canonical_hash
 
 logger = logging.getLogger(__name__)
 
 
+class ReceiptConflictError(Exception):
+    def __init__(self, *, receipt_id: str, existing_hash: str, incoming_hash: str) -> None:
+        self.receipt_id = receipt_id
+        self.existing_hash = existing_hash
+        self.incoming_hash = incoming_hash
+        super().__init__("receipt_id collision with different canonical hash")
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    canonical = dict(payload)
+    canonical.pop("stored_at", None)
+    canonical.pop("tenant_id", None)
+    return canonical
+
+
+def _canonical_receipt_hash(payload: dict[str, Any]) -> str:
+    canonical_payload = _canonical_payload(payload)
+    include_created_at = canonical_payload.get("created_at") is not None
+    _, digest = canonical_hash(canonical_payload, include_created_at=include_created_at)
+    return digest
 
 
 def store_receipt(db, payload: dict[str, Any], tenant_id: str) -> dict[str, Any]:
@@ -70,6 +94,54 @@ def store_receipt(db, payload: dict[str, Any], tenant_id: str) -> dict[str, Any]
     )
 
     return {"receipt_id": receipt_id, "stored_at": stored_at, "tenant_id": tenant_id}
+
+
+def put_receipt(db, payload: dict[str, Any], tenant_id: str) -> dict[str, Any]:
+    receipt_id = payload.get("receipt_id")
+    if not receipt_id:
+        raise ValueError("receipt_id is required")
+
+    incoming_hash = _canonical_receipt_hash(payload)
+    existing = get_receipt(db, tenant_id, receipt_id)
+    if existing:
+        existing_hash = _canonical_receipt_hash(existing)
+        if existing_hash == incoming_hash:
+            return {
+                "receipt_id": receipt_id,
+                "stored_at": existing.get("stored_at"),
+                "tenant_id": tenant_id,
+                "canonical_hash": incoming_hash,
+                "idempotent_replay": True,
+            }
+        raise ReceiptConflictError(
+            receipt_id=receipt_id,
+            existing_hash=existing_hash,
+            incoming_hash=incoming_hash,
+        )
+
+    try:
+        result = store_receipt(db, payload, tenant_id)
+    except IntegrityError:
+        existing = get_receipt(db, tenant_id, receipt_id)
+        if existing:
+            existing_hash = _canonical_receipt_hash(existing)
+            if existing_hash == incoming_hash:
+                return {
+                    "receipt_id": receipt_id,
+                    "stored_at": existing.get("stored_at"),
+                    "tenant_id": tenant_id,
+                    "canonical_hash": incoming_hash,
+                    "idempotent_replay": True,
+                }
+            raise ReceiptConflictError(
+                receipt_id=receipt_id,
+                existing_hash=existing_hash,
+                incoming_hash=incoming_hash,
+            )
+        raise
+
+    result.update({"canonical_hash": incoming_hash, "idempotent_replay": False})
+    return result
 
 
 def list_inbox(db, tenant_id: str, recipient_ai: str, limit: int = 20) -> dict[str, Any]:

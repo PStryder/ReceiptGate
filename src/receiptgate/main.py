@@ -10,7 +10,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from receiptgate import __version__
-from receiptgate.api import router as api_router
 from receiptgate.config import settings
 from receiptgate.db import init_db
 from receiptgate.errors import ReceiptGateError
@@ -33,8 +32,11 @@ def create_app() -> FastAPI:
     )
 
     configure_middleware(app)
-    app.include_router(api_router)
     app.include_router(mcp_router)
+
+    @app.get("/health")
+    def health():
+        return {"ok": True, "service": settings.service_name}
 
     @app.exception_handler(ReceiptGateError)
     async def receiptgate_error_handler(_request: Request, exc: ReceiptGateError):

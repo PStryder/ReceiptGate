@@ -40,7 +40,8 @@ def db_session(tmp_path, monkeypatch):
 
 
 @pytest.fixture()
-def api_client(tmp_path, monkeypatch):
+def mcp_client(tmp_path, monkeypatch):
+    pytest.importorskip("fastapi", exc_type=ImportError)
     db_path = tmp_path / "receiptgate_api.db"
     monkeypatch.setattr(settings, "database_url", f"sqlite:///{db_path}")
     monkeypatch.setattr(settings, "allow_insecure_dev", True)

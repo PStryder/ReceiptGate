@@ -6,8 +6,8 @@ obligation truth (inbox, chain, history) from those receipts.
 
 ## What it is
 - Immutable receipt ledger
-- Idempotent append-only API
-- Derived inbox/chain endpoints
+- Idempotent append-only MCP interface
+- Derived inbox/chain tools
 
 ## What it is not
 - Durable task store (AsyncGate owns task lifecycle)
@@ -40,26 +40,33 @@ Schema files live in `schema/` and can be auto-applied on startup when
 python scripts/golden_path.py
 ```
 
-## API Endpoints
+## MCP Interface
 
-- `POST /receipts` - Append a receipt (idempotent)
-- `GET /receipts/{receipt_id}` - Fetch receipt
-- `GET /receipts/{receipt_id}/chain` - Causality chain
-- `POST /receipts/search` - Search receipts
-- `GET /inbox/{recipient}` - Open obligations for recipient
-- `GET /receipts/stats` - Summary stats
-- `GET /health` - Health check
+ReceiptGate is MCP-only (JSON-RPC over HTTP). The MCP endpoint is:
+
+```
+POST /mcp
+```
+
+Tool names:
+- `receiptgate.submit_receipt` - Append a receipt (idempotent)
+- `receiptgate.list_inbox` - Open obligations for recipient
+- `receiptgate.get_receipt_chain` - Causality chain
+- `receiptgate.search_receipts` - Search receipt headers
+- `receiptgate.list_task_receipts` - All receipts for a task
+- `receiptgate.get_receipt` - Fetch full receipt payload
+- `receiptgate.health` - MCP health check
+
+Plain HTTP health check is still available at:
+- `GET /health`
 
 ## Receipt Phases & Termination
-
-Receipt phases (REST API): `accepted`, `complete`, `escalate`, `cancel`.
 
 Terminal phases for obligation closure:
 - `complete`
 - `escalate`
-- `cancel`
 
-LegiVellum v1 receipts (MCP) use terminal phases `complete` and `escalate`.
+LegiVellum v1 receipts use terminal phases `complete` and `escalate`.
 
 ## Canonical Principals
 
