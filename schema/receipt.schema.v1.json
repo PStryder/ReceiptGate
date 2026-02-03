@@ -39,6 +39,7 @@
     "escalation_reason",
     "escalation_to",
     "retry_requested",
+    "body",
     "created_at",
     "stored_at",
     "started_at",
@@ -238,6 +239,19 @@
     "retry_requested": {
       "type": "boolean",
       "description": "True if escalation requests retry. (Attempt increment policy handled by caller.)"
+    },
+    "body": {
+      "type": "object",
+      "description": "Canonical receipt body payload (protocol envelope).",
+      "additionalProperties": true
+    },
+    "artifact_refs": {
+      "type": "array",
+      "description": "Optional artifact references for completed receipts.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
     },
     "created_at": {
       "oneOf": [

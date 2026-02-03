@@ -58,6 +58,11 @@ def _base_payload(
         "escalation_reason": escalation_reason,
         "escalation_to": escalation_to,
         "retry_requested": False,
+        "body": {
+            "summary": "Test receipt",
+            "phase": phase,
+        },
+        "artifact_refs": [],
         "created_at": now,
         "stored_at": now,
         "started_at": None,

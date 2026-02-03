@@ -49,6 +49,11 @@ def _receipt_payload(
         "escalation_reason": "NA",
         "escalation_to": "NA",
         "retry_requested": False,
+        "body": {
+            "summary": f"Test receipt {receipt_id}",
+            "phase": phase,
+        },
+        "artifact_refs": [],
         "created_at": now,
         "stored_at": None,
         "started_at": now if phase == "accepted" else None,
