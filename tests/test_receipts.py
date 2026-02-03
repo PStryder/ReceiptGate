@@ -99,3 +99,18 @@ def test_put_receipt_created_at_affects_hash(db_session):
     )
     with pytest.raises(ReceiptConflictError):
         put_receipt(db_session, mutated, "tenant-a")
+
+
+def test_put_receipt_allows_same_id_different_tenant(db_session):
+    payload = _receipt_payload(receipt_id="r-shared", task_id="task-7", recipient_ai="agent:a")
+    result_a = put_receipt(db_session, payload, "tenant-a")
+    assert result_a["idempotent_replay"] is False
+
+    mutated = _receipt_payload(
+        receipt_id="r-shared",
+        task_id="task-7",
+        recipient_ai="agent:a",
+        task_summary="Different summary",
+    )
+    result_b = put_receipt(db_session, mutated, "tenant-b")
+    assert result_b["idempotent_replay"] is False

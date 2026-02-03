@@ -192,3 +192,66 @@ def test_receipts_search_filters_by_phase_and_task(mcp_client):
     )
     assert len(response.get("receipts", [])) == 1
     assert response["receipts"][0]["receipt_id"] == "r-6"
+
+
+def test_bootstrap_returns_inbox(mcp_client):
+    accepted = _receipt_payload(
+        receipt_id="r-7",
+        task_id="task-7",
+        recipient_ai="agent:z",
+    )
+    _mcp_call(mcp_client, "receiptgate.submit_receipt", {"receipt": accepted})
+
+    response = _mcp_call(
+        mcp_client,
+        "receiptgate.bootstrap",
+        {"agent_name": "agent:z", "session_id": "sess-1"},
+    )
+    inbox = response.get("inbox", {})
+    assert inbox.get("recipient_ai") == "agent:z"
+    assert any(item.get("task_id") == "task-7" for item in inbox.get("receipts", []))
+
+
+def test_list_task_receipts_include_payload(mcp_client):
+    accepted = _receipt_payload(
+        receipt_id="r-8",
+        task_id="task-8",
+        recipient_ai="agent:a",
+    )
+    _mcp_call(mcp_client, "receiptgate.submit_receipt", {"receipt": accepted})
+
+    complete = _receipt_payload(
+        receipt_id="r-8c",
+        task_id="task-8",
+        recipient_ai="agent:a",
+        phase="complete",
+        status="success",
+        caused_by_receipt_id="r-8",
+        outcome_kind="response_text",
+        outcome_text="done",
+    )
+    _mcp_call(mcp_client, "receiptgate.submit_receipt", {"receipt": complete})
+
+    response = _mcp_call(
+        mcp_client,
+        "receiptgate.list_task_receipts",
+        {"task_id": "task-8", "include_payload": True},
+    )
+    assert len(response.get("receipts", [])) == 2
+    assert "payload" in response["receipts"][0]
+
+
+def test_get_receipt_returns_payload(mcp_client):
+    payload = _receipt_payload(
+        receipt_id="r-9",
+        task_id="task-9",
+        recipient_ai="agent:a",
+    )
+    _mcp_call(mcp_client, "receiptgate.submit_receipt", {"receipt": payload})
+
+    result = _mcp_call(
+        mcp_client,
+        "receiptgate.get_receipt",
+        {"receipt_id": "r-9"},
+    )
+    assert result["receipt_id"] == "r-9"
