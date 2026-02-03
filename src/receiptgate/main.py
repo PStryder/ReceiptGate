@@ -33,10 +33,6 @@ def create_app() -> FastAPI:
     configure_middleware(app)
     app.include_router(mcp_router)
 
-    @app.get("/health")
-    def health():
-        return {"ok": True, "service": settings.service_name}
-
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(_request: Request, exc: RequestValidationError):
         payload = {

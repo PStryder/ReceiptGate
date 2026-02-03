@@ -1,38 +1,95 @@
-### Put receipt (accepted)
-POST http://localhost:8000/receipts
+### Submit receipt (accepted)
+POST http://localhost:8000/mcp
 X-API-Key: rg_change_me
 Content-Type: application/json
 
 {
-  "receipt_id": "rcpt_2026-01-09T13:52:10Z_abc123",
-  "phase": "accepted",
-  "obligation_id": "obl_demo_001",
-  "created_by": "DeleGate.alpha",
-  "recipient": "CogniGate.beta",
-  "body": {
-    "summary": "Accepted obligation to evaluate contract clauses."
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "receiptgate.submit_receipt",
+    "arguments": {
+      "receipt": {
+        "receipt_id": "rcpt_2026-01-09T13:52:10Z_abc123",
+        "phase": "accepted",
+        "obligation_id": "obl_demo_001",
+        "created_by": "DeleGate.alpha",
+        "recipient": "CogniGate.beta",
+        "body": {
+          "summary": "Accepted obligation to evaluate contract clauses."
+        }
+      }
+    }
   }
 }
 
 ### Get receipt
-GET http://localhost:8000/receipts/rcpt_2026-01-09T13:52:10Z_abc123
-X-API-Key: rg_change_me
-
-### Search receipts
-POST http://localhost:8000/receipts/search
+POST http://localhost:8000/mcp
 X-API-Key: rg_change_me
 Content-Type: application/json
 
 {
-  "recipient": "CogniGate.beta",
-  "phase": "accepted",
-  "limit": 25
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "receiptgate.get_receipt",
+    "arguments": {
+      "receipt_id": "rcpt_2026-01-09T13:52:10Z_abc123"
+    }
+  }
+}
+
+### Search receipts
+POST http://localhost:8000/mcp
+X-API-Key: rg_change_me
+Content-Type: application/json
+
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "tools/call",
+  "params": {
+    "name": "receiptgate.search_receipts",
+    "arguments": {
+      "recipient_ai": "CogniGate.beta",
+      "phase": "accepted",
+      "limit": 25
+    }
+  }
 }
 
 ### Receipt chain
-GET http://localhost:8000/receipts/rcpt_2026-01-09T13:52:10Z_abc123/chain
+POST http://localhost:8000/mcp
 X-API-Key: rg_change_me
+Content-Type: application/json
+
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "method": "tools/call",
+  "params": {
+    "name": "receiptgate.get_receipt_chain",
+    "arguments": {
+      "receipt_id": "rcpt_2026-01-09T13:52:10Z_abc123"
+    }
+  }
+}
 
 ### Inbox
-GET http://localhost:8000/inbox/CogniGate.beta
+POST http://localhost:8000/mcp
 X-API-Key: rg_change_me
+Content-Type: application/json
+
+{
+  "jsonrpc": "2.0",
+  "id": 5,
+  "method": "tools/call",
+  "params": {
+    "name": "receiptgate.list_inbox",
+    "arguments": {
+      "recipient_ai": "CogniGate.beta"
+    }
+  }
+}

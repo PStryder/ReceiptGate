@@ -88,7 +88,8 @@ api:
     - receipts.search
     - receipts.chain
     - receipts.inbox
-    - receipts.stats
+    - receipts.bootstrap
+    - receipts.task_list
     - health.get
   disabled_namespaces:
     - memory.put
@@ -276,39 +277,52 @@ This is the guardrail that prevents ReceiptGate from quietly becoming “MemoryG
 
 namespaces:
   receipts.put:
-    method: POST
-    path: /receipts
+    method: MCP
+    path: /mcp
+    tool: receiptgate.submit_receipt
     description: Append a new receipt (immutable). Validates phase and required fields.
 
   receipts.get:
-    method: GET
-    path: /receipts/{receipt_id}
+    method: MCP
+    path: /mcp
+    tool: receiptgate.get_receipt
     description: Fetch a single receipt by id.
 
   receipts.search:
-    method: POST
-    path: /receipts/search
+    method: MCP
+    path: /mcp
+    tool: receiptgate.search_receipts
     description: Query receipts by actor/phase/obligation/time + optional text search over body.
 
   receipts.chain:
-    method: GET
-    path: /receipts/{receipt_id}/chain
+    method: MCP
+    path: /mcp
+    tool: receiptgate.get_receipt_chain
     description: Traverse caused_by lineage and return ordered chain.
 
   receipts.inbox:
-    method: GET
-    path: /inbox/{recipient}
+    method: MCP
+    path: /mcp
+    tool: receiptgate.list_inbox
     description: Return open obligations for recipient (derived from receipt truth).
 
-  receipts.stats:
-    method: GET
-    path: /receipts/stats
-    description: Counts, phases, top recipients, ingestion rate.
+  receipts.bootstrap:
+    method: MCP
+    path: /mcp
+    tool: receiptgate.bootstrap
+    description: Return open obligations for a principal (bootstrap dump).
+
+  receipts.task_list:
+    method: MCP
+    path: /mcp
+    tool: receiptgate.list_task_receipts
+    description: List receipts for a task id (ordered).
 
   health.get:
-    method: GET
-    path: /health
-    description: Liveness/readiness.
+    method: MCP
+    path: /mcp
+    tool: receiptgate.health
+    description: Service health and version.
 
 policy.md (ReceiptGate behavioral contract)
 # ReceiptGate Policy

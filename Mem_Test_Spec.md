@@ -69,7 +69,7 @@ WAITING → LEASED → {SUCCESS, FAILURE, EXPIRED}
 ```
 
 **Key Operations:**
-- POST /v1/lease - Worker polling endpoint (returns 204 or task offer)
+- MCP: asyncgate.lease_next - Worker polling tool (returns empty list or task offer)
 - Task acceptance via receipt emission (creates obligation)
 - Lease expiry = lost authority (NOT failure, doesn't consume retry attempts)
 - Orphan handling via expiry sweep

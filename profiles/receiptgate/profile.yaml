@@ -50,7 +50,8 @@ api:
     - receipts.search
     - receipts.chain
     - receipts.inbox
-    - receipts.stats
+    - receipts.bootstrap
+    - receipts.task_list
     - health.get
   disabled_namespaces:
     - memory.put

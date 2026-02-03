@@ -28,7 +28,9 @@ pip install -e .
 Health check:
 
 ```bash
-curl http://localhost:8000/health
+curl -s http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"receiptgate.health","arguments":{}}}'
 ```
 
 Schema files live in `schema/` and can be auto-applied on startup when
@@ -57,8 +59,6 @@ Tool names:
 - `receiptgate.get_receipt` - Fetch full receipt payload
 - `receiptgate.health` - MCP health check
 
-Plain HTTP health check is still available at:
-- `GET /health`
 
 ## Receipt Phases & Termination
 
