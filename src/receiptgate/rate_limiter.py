@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
 try:
-    import redis.asyncio as redis_async  # type: ignore
+    import redis.asyncio as redis_async
 except Exception:
     redis_async = None
 
