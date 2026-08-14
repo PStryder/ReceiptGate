@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -24,8 +25,23 @@ TERMINAL_PHASES = {"complete", "escalate"}
 
 
 def _schema_path() -> Path:
-    root = Path(__file__).resolve().parents[2]
-    return root / "schema" / "receipt.schema.v1.json"
+    """Locate the receipt schema in both installed and checkout layouts.
+
+    parents[2] is the repo root in a source checkout but the site-packages
+    parent once installed, so an installed ReceiptGate looked for the schema at
+    /usr/local/lib/python3.11/schema and never found it. The schema ships
+    inside the package (see the wheel force-include in pyproject.toml), so
+    prefer that and fall back to the repo layout for editable installs.
+    """
+    override = os.environ.get("RECEIPTGATE_SCHEMA_DIR")
+    if override:
+        return Path(override) / "receipt.schema.v1.json"
+
+    packaged = Path(__file__).resolve().parent / "schema" / "receipt.schema.v1.json"
+    if packaged.is_file():
+        return packaged
+
+    return Path(__file__).resolve().parents[2] / "schema" / "receipt.schema.v1.json"
 
 
 def _json_size_bytes(value: Any) -> int:
@@ -68,7 +84,16 @@ def validate_json_schema(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
     schema_path = _schema_path()
     if not schema_path.exists():
-        return []
+        # Failing open here silently disabled every phase rule in
+        # receipt.rules.md for any deployment that could not find the file --
+        # accepted receipts with terminal status, completions with no
+        # completed_at, and artifact claims with no pointer were all stored
+        # without complaint. A validator that cannot find its rules is
+        # misconfigured, not permissive.
+        raise RuntimeError(
+            f"Receipt schema not found at {schema_path}; refusing to validate "
+            "receipts without it. Set RECEIPTGATE_SCHEMA_DIR to override."
+        )
 
     with schema_path.open("r", encoding="utf-8") as f:
         schema = json.load(f)

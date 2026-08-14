@@ -414,6 +414,9 @@
               "artifact_pointer",
               "mixed"
             ]
+          },
+          "escalation_class": {
+            "const": "NA"
           }
         }
       }
@@ -444,6 +447,11 @@
           "escalation_reason": {
             "not": {
               "const": "TBD"
+            }
+          },
+          "escalation_to": {
+            "not": {
+              "const": "NA"
             }
           }
         },
@@ -486,6 +494,9 @@
             "not": {
               "const": "NA"
             }
+          },
+          "escalation_class": {
+            "const": "NA"
           }
         }
       }
