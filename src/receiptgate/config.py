@@ -106,6 +106,15 @@ class Settings(BaseSettings):
             return "sqlite"
         return "other"
 
+
+    # MetaGate bootstrap. Optional by design: MetaGate is a describe-only,
+    # non-blocking authority, so an unset endpoint means "use the values
+    # configured here" rather than a misconfiguration.
+    metagate_endpoint: str | None = Field(default=None, description="MetaGate MCP endpoint for bootstrap")
+    metagate_api_key: str | None = Field(default=None, description="API key for MetaGate bootstrap")
+    metagate_component_key: str = Field(default="receiptgate", description="Component key presented at bootstrap")
+    metagate_bootstrap_timeout_seconds: float = Field(default=5.0, description="Bootstrap request timeout")
+
     @field_validator("database_url", mode="before")
     @classmethod
     def prefer_global_database_url(cls, v: str) -> str:

@@ -14,11 +14,20 @@ from receiptgate.config import settings
 from receiptgate.db import init_db
 from receiptgate.middleware import configure_middleware
 from receiptgate.mcp.routes import router as mcp_router
+from receiptgate.metagate_client import acknowledge_startup, bootstrap_from_metagate
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+
+    # Resolve peer endpoints from MetaGate before anything that uses them.
+    # Best-effort by design: a failure must never prevent startup, or the
+    # bootstrap authority becomes a hidden master.
+    _bootstrap = await bootstrap_from_metagate(settings)
+    if _bootstrap is not None and _bootstrap.succeeded:
+        await acknowledge_startup(settings, _bootstrap)
+
     yield
 
 
