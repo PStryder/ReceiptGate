@@ -6,7 +6,7 @@ import os
 from typing import Literal
 from datetime import datetime, timezone
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -137,14 +137,14 @@ class Settings(BaseSettings):
             raise ValueError("search_max_limit must be >= search_default_limit")
         return v
 
-    @field_validator("api_key")
-    @classmethod
-    def validate_api_key(cls, v: SecretStr, info) -> SecretStr:
-        allow_insecure = info.data.get("allow_insecure_dev", False)
-        key_value = v.get_secret_value() if isinstance(v, SecretStr) else str(v)
-        if not key_value and not allow_insecure:
+    @model_validator(mode="after")
+    def validate_api_key(self) -> "Settings":
+        # Checked after all fields are populated: a field_validator on api_key
+        # cannot see allow_insecure_dev, which is declared later and so is
+        # absent from ValidationInfo.data.
+        if not self.api_key_value and not self.allow_insecure_dev:
             raise ValueError("api_key is required when allow_insecure_dev=False")
-        return v
+        return self
 
 
 settings = Settings()
