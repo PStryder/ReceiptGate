@@ -88,6 +88,7 @@ def _build_receipt(
     caused_by_receipt_id: str = "NA",
     outcome_kind: str = "NA",
     outcome_text: str = "NA",
+    body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     completed_at = now if phase == "complete" else None
@@ -124,6 +125,7 @@ def _build_receipt(
         "escalation_reason": "NA",
         "escalation_to": "NA",
         "retry_requested": False,
+        "body": body if body is not None else {},
         "created_at": now,
         "stored_at": None,
         "started_at": now if phase == "accepted" else None,
@@ -163,6 +165,9 @@ def main() -> int:
         caused_by_receipt_id=accepted_receipt_id,
         outcome_kind="response_text",
         outcome_text="Demo complete",
+        # Protocol Golden 7.2: a complete receipt must carry artifact_refs or
+        # a body.result stating the outcome. This demo produces no artifacts.
+        body={"result": {"summary": "Demo complete", "artifacts": "none"}},
     )
 
     print("Submitting accepted receipt (MCP)...")

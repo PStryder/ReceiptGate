@@ -191,7 +191,7 @@
     "artifact_location": {
       "type": "string",
       "minLength": 1,
-      "description": "Artifact backend label (e.g., s3|gcs|azure|url|file|memorygate|NA)."
+      "description": "Artifact backend label (e.g., depotgate|s3|gcs|azure|url|file|NA)."
     },
     "artifact_pointer": {
       "type": "string",
