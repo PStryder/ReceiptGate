@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Generator
 
@@ -27,6 +28,22 @@ def _schema_root() -> Path:
 
 
 def _schema_dir() -> Path:
+    """Locate the SQL schema directory in both installed and checkout layouts.
+
+    When pip-installed, `parents[2]` is the site-packages parent (e.g.
+    /usr/local/lib/python3.11), so the repo-relative path does not exist. The
+    schema files ship inside the package (see the wheel force-include in
+    pyproject.toml), so prefer the package-local copy and fall back to the
+    repo layout for editable/source checkouts.
+    """
+    override = os.environ.get("RECEIPTGATE_SCHEMA_DIR")
+    if override:
+        return Path(override)
+
+    packaged = Path(__file__).resolve().parent / "schema"
+    if packaged.is_dir():
+        return packaged
+
     return _schema_root() / "schema"
 
 

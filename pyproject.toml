@@ -38,6 +38,11 @@ receiptgate = "receiptgate.main:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/receiptgate"]
 
+# Ship the SQL schema inside the package. Without this, an installed
+# ReceiptGate cannot run its own startup migrations.
+[tool.hatch.build.targets.wheel.force-include]
+"schema" = "receiptgate/schema"
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
