@@ -12,7 +12,6 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
 
 try:
     import redis.asyncio as redis_async
@@ -36,7 +35,7 @@ class RateLimitConfig:
     auth_ip: RateLimitRule
     max_cache_entries: int
     trusted_proxy_count: int
-    trusted_proxy_ips: Tuple[str, ...]
+    trusted_proxy_ips: tuple[str, ...]
     redis_fail_open: bool
 
 
@@ -105,7 +104,7 @@ class RateLimiter:
 class InMemoryRateLimiter(RateLimiter):
     def __init__(self, max_entries: int = 10000):
         self._lock = asyncio.Lock()
-        self._counters: Dict[str, Tuple[int, float]] = {}
+        self._counters: dict[str, tuple[int, float]] = {}
         self._max_entries = max_entries
         self._last_sweep = 0.0
 
@@ -251,14 +250,14 @@ class RateLimitMiddleware:
         await self.app(scope, receive, send)
 
     @staticmethod
-    def _normalize_headers(headers) -> Dict[str, str]:
+    def _normalize_headers(headers) -> dict[str, str]:
         return {
             (k.decode() if isinstance(k, bytes) else str(k)).lower():
             (v.decode() if isinstance(v, bytes) else str(v))
             for k, v in headers
         }
 
-    def _get_client_ip(self, scope, headers: Dict[str, str]) -> str:
+    def _get_client_ip(self, scope, headers: dict[str, str]) -> str:
         client = scope.get("client")
         client_ip = client[0] if client else ""
 
@@ -283,7 +282,7 @@ class RateLimitMiddleware:
             return client_ip in self.config.trusted_proxy_ips
         return False
 
-    def _select_forwarded_ip(self, forwarded_for: str) -> Optional[str]:
+    def _select_forwarded_ip(self, forwarded_for: str) -> str | None:
         ips = [ip.strip() for ip in forwarded_for.split(",") if ip.strip()]
         if not ips:
             return None
@@ -293,7 +292,7 @@ class RateLimitMiddleware:
         return ips[0]
 
     @staticmethod
-    def _extract_api_key_prefix(headers: Dict[str, str]) -> Optional[str]:
+    def _extract_api_key_prefix(headers: dict[str, str]) -> str | None:
         auth_header = headers.get("authorization", "")
         api_key = ""
         if auth_header.lower().startswith("bearer "):

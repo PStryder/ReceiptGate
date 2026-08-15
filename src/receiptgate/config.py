@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 from typing import Literal
-from datetime import datetime, timezone
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -147,7 +147,7 @@ class Settings(BaseSettings):
         return v
 
     @model_validator(mode="after")
-    def validate_api_key(self) -> "Settings":
+    def validate_api_key(self) -> Settings:
         # Checked after all fields are populated: a field_validator on api_key
         # cannot see allow_insecure_dev, which is declared later and so is
         # absent from ValidationInfo.data.
@@ -161,4 +161,4 @@ settings = Settings()
 
 def receiptgate_clock() -> str:
     """Return server clock timestamp for stored_at."""
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()

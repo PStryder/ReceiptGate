@@ -11,3 +11,6 @@ build/
 .eggs/
 *.log
 .DS_Store
+
+# Resolver output, not a source artifact; sibling repos ignore it too.
+uv.lock

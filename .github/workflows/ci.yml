@@ -25,9 +25,19 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
+      - name: Checkout LegiVellum (canonical protocol package)
+        uses: actions/checkout@v4
+        with:
+          repository: PStryder/LegiVellum
+          path: _legivellum
+          fetch-depth: 1
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          # Canonical protocol package first; it is a hard dependency and is
+          # not published to an index.
+          python -m pip install -e ./_legivellum
           python -m pip install -e ".[dev]"
 
       - name: Dependency health
@@ -37,10 +47,14 @@ jobs:
         run: python -m compileall -q src/receiptgate
 
       - name: Ruff (full repo)
-        run: ruff check src/receiptgate --select E9,F63,F7,F82
+        # The declared [tool.ruff.lint] selection, not a hand-picked subset.
+        run: ruff check src/receiptgate
 
       - name: Mypy (full repo)
-        run: python -m mypy --config-file .mypy-ci.ini src/receiptgate
+        # The declared [tool.mypy] config; the .mypy-ci.ini override that
+        # disabled call-arg is deleted. That code caught a live defect
+        # here: a post-commit log line that failed the client's write.
+        run: python -m mypy src/receiptgate
 
       - name: Run tests with coverage gate
         run: |
@@ -48,3 +62,18 @@ jobs:
             --cov=receiptgate \
             --cov-report=term \
             --cov-fail-under=75
+
+      # Phase 0 exit condition. Builds the real image and runs the canonical
+      # validation probe *inside* it, against what the image actually contains.
+      # The defect this guards was invisible in a checkout: `legivellum` was
+      # resolved by walking parent directories for a source tree that exists
+      # here and not in a container, so validation was off in every deployment
+      # while CI stayed green.
+      - name: Container validation probe
+        run: |
+          mkdir -p _ctx
+          cp -r _legivellum _ctx/LegiVellum
+          mkdir -p _ctx/ReceiptGate
+          cp -r pyproject.toml README.md src schema _ctx/ReceiptGate/
+          docker build -f ReceiptGate/Dockerfile -t receiptgate-ci _ctx
+          docker run --rm -v "$PWD/_legivellum/problemata_demo:/probe:ro" receiptgate-ci python /probe/container_validation_probe.py

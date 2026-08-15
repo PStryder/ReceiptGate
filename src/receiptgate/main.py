@@ -12,9 +12,9 @@ from fastapi.responses import JSONResponse
 from receiptgate import __version__
 from receiptgate.config import settings
 from receiptgate.db import init_db
-from receiptgate.middleware import configure_middleware
 from receiptgate.mcp.routes import router as mcp_router
 from receiptgate.metagate_client import acknowledge_startup, bootstrap_from_metagate
+from receiptgate.middleware import configure_middleware
 
 
 @asynccontextmanager

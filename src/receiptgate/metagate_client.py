@@ -21,7 +21,7 @@ import logging
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ _BINDING_SPECS: tuple[tuple[str, str], ...] = ()
 COMPONENT_KEY = "receiptgate"
 
 
-def _load_shared_bootstrap() -> Optional[ModuleType]:
+def _load_shared_bootstrap() -> ModuleType | None:
     """Load the shared client as a standalone module, or return None."""
     for parent in Path(__file__).resolve().parents:
         candidate = parent / _SHARED_RELPATH

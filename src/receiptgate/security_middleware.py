@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Dict, Optional
 
 
 def _get_bool(env_name: str, default: bool) -> bool:
@@ -47,7 +46,7 @@ class SecurityHeadersConfig:
     referrer_policy: str
     frame_options: str
     permissions_policy: str
-    content_security_policy: Optional[str]
+    content_security_policy: str | None
 
 
 @dataclass(frozen=True)
@@ -173,7 +172,7 @@ class RequestSizeLimitMiddleware:
             await self._send_413(send, self.config.max_body_bytes)
 
     @staticmethod
-    def _normalize_headers(headers) -> Dict[str, str]:
+    def _normalize_headers(headers) -> dict[str, str]:
         return {
             (k.decode() if isinstance(k, bytes) else str(k)).lower():
             (v.decode() if isinstance(v, bytes) else str(v))

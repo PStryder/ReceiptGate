@@ -7,12 +7,13 @@ import os
 from pathlib import Path
 from typing import Any
 
-try:
-    import jsonschema
-    JSONSCHEMA_AVAILABLE = True
-except ImportError:
-    JSONSCHEMA_AVAILABLE = False
-
+# Imported unguarded on purpose. The availability flag this replaces made a
+# broken install indistinguishable from a valid one: `validate_json_schema`
+# returned no errors, ReceiptGate reported healthy, and it accepted arbitrary
+# JSON as receipts indefinitely. That is the same fail-open shape the missing-
+# schema branch below exists to prevent, and it deserved the same answer --
+# a ledger that cannot validate must fail to start, naming the dependency.
+import jsonschema
 
 FIELD_SIZE_LIMITS = {
     "inputs": 64 * 1024,
@@ -79,9 +80,6 @@ def validate_routing_invariant(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def validate_json_schema(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    if not JSONSCHEMA_AVAILABLE:
-        return []
-
     schema_path = _schema_path()
     if not schema_path.exists():
         # Failing open here silently disabled every phase rule in

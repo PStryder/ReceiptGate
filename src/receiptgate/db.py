@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 

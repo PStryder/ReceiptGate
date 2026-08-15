@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.exc import IntegrityError
 
-from receiptgate.validation_v1 import TERMINAL_PHASES
 from receiptgate.utils import canonical_hash
+from receiptgate.validation_v1 import TERMINAL_PHASES
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class ReceiptConflictError(Exception):
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -83,14 +83,23 @@ def store_receipt(db, payload: dict[str, Any], tenant_id: str) -> dict[str, Any]
         db.rollback()
         raise
 
+    # structlog-style kwargs against a stdlib logger raise TypeError, and this
+    # line sits *after* db.commit() and outside the try/except above. At INFO
+    # level -- the normal production posture -- every first write therefore
+    # committed durably and then returned "Failed to store receipt" to the
+    # client. A client that responds by minting a different receipt for the
+    # same obligation corrupts the ledger. Logging must never change the
+    # protocol result after commit.
     logger.info(
         "receiptgate_v1_receipt_stored",
-        receipt_id=receipt_id,
-        tenant_id=tenant_id,
-        task_id=record.get("task_id"),
-        phase=record.get("phase"),
-        recipient_ai=record.get("recipient_ai"),
-        caused_by_receipt_id=record.get("caused_by_receipt_id"),
+        extra={
+            "receipt_id": receipt_id,
+            "tenant_id": tenant_id,
+            "task_id": record.get("task_id"),
+            "phase": record.get("phase"),
+            "recipient_ai": record.get("recipient_ai"),
+            "caused_by_receipt_id": record.get("caused_by_receipt_id"),
+        },
     )
 
     return {"receipt_id": receipt_id, "stored_at": stored_at, "tenant_id": tenant_id}

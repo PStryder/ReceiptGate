@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import secrets
-from typing import Optional
 
 from fastapi import Header, HTTPException, status
 
@@ -20,8 +19,8 @@ API_KEY_PREFIX = "rg_"
 
 
 def verify_api_key(
-    authorization: Optional[str] = Header(None),
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    authorization: str | None = Header(None),
+    x_api_key: str | None = Header(None, alias="X-API-Key"),
 ) -> bool:
     """Verify API key for protected endpoints."""
     if settings.allow_insecure_dev:
