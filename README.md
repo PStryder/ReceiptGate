@@ -57,6 +57,7 @@ Tool names:
 - `receiptgate.search_receipts` - Search receipt headers
 - `receiptgate.list_task_receipts` - All receipts for a task
 - `receiptgate.get_receipt` - Fetch full receipt payload
+- `receiptgate.bootstrap` - Open a session for an agent: returns its inbox plus ledger config (schema version, endpoint, limits). Requires `agent_name` and `session_id`. Distinct from `metagate.bootstrap`, which resolves topology for a *service*; this one hands an *agent* its open obligations.
 - `receiptgate.health` - MCP health check
 
 
@@ -89,3 +90,23 @@ See `.env.example` for the full list. Key variables:
 ```bash
 pytest tests/ -v
 ```
+
+## MetaGate Bootstrap
+
+On startup this gate asks MetaGate for the topology it belongs to and fills in
+endpoints the operator did not configure. It declares no endpoint bindings: ReceiptGate is a leaf, so everything calls it and it calls no other primitive.
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `RECEIPTGATE_METAGATE_ENDPOINT` | *(unset)* | MetaGate MCP endpoint. Unset disables bootstrap; the gate starts on configured values alone. |
+| `RECEIPTGATE_METAGATE_API_KEY` | *(unset)* | Credential presented to MetaGate |
+| `RECEIPTGATE_METAGATE_COMPONENT_KEY` | `receiptgate` | Which component in the manifest this process is |
+| `RECEIPTGATE_METAGATE_BOOTSTRAP_TIMEOUT_SECONDS` | `5.0` | Per-call timeout |
+
+Bootstrap never prevents startup. Every failure — unreachable, timeout, auth
+rejected, no binding, malformed packet — degrades to a logged warning and
+"carry on with configured values", because a bootstrap authority that can take
+the mesh down would be a hidden master. Explicit configuration always wins;
+bootstrap fills gaps and logs when the mesh disagrees rather than overriding.
+
+See `LegiVellum/docs/canonical/metagate.bootstrap.md` for the full contract.
