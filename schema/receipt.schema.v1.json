@@ -1,15 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://legivellum.dev/spec/receipt.schema.v1.json",
-  "title": "LegiVellum Receipt v1",
+  "title": "LegiVellum Receipt v1.1",
   "type": "object",
   "additionalProperties": false,
-  "description": "Receipt is the only coordination protocol. phase=accepted creates an obligation for the issuer; phase=complete resolves it; phase=escalate transfers/transforms responsibility (soft push to a target inbox) and ends the issuer obligation for that task instance. Escalation must target recipient_ai; the new owner continues the work by issuing new accepted tasks tied back via parent_task_id/caused_by_receipt_id. NOTE: The routing invariant (recipient_ai == escalation_to when phase=escalate) cannot be fully expressed in JSON Schema and must be enforced at the application level. See spec/receipt.rules.md Section 9 for validation requirements.",
+  "description": "Receipt is the only coordination protocol. phase=accepted creates an obligation for the issuer; phase=complete resolves it; phase=escalate transfers/transforms responsibility (soft push to a target inbox) and ends the issuer obligation for that task instance. Escalation must target recipient_ai; the new owner continues the work by issuing new accepted tasks tied back via parent_task_id/caused_by_receipt_id. NOTE: The routing invariant (recipient_ai == escalation_to when phase=escalate) cannot be fully expressed in JSON Schema and must be enforced at the application level. See spec/receipt.rules.md Section 9 for validation requirements. v1.1 adds obligation_id: task_id groups related work, obligation_id identifies one governed responsibility, and only the obligation named by a receipt may be opened, transferred or closed by it.",
   "required": [
     "schema_version",
     "tenant_id",
     "receipt_id",
     "task_id",
+    "obligation_id",
     "parent_task_id",
     "caused_by_receipt_id",
     "dedupe_key",
@@ -67,6 +68,11 @@
       "type": "string",
       "minLength": 1,
       "description": "Stable correlation key for the lifecycle of a task instance."
+    },
+    "obligation_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifies one governed responsibility. Distinct from task_id, which groups related work: a single task_id may carry several independent obligations (fan-out to two reviewers), and only the obligation named here may be opened, transferred or closed by this receipt. Minted by the accepting authority; every later receipt in that obligation's lifecycle repeats it. Must not be 'NA' or 'TBD' by policy."
     },
     "parent_task_id": {
       "type": "string",

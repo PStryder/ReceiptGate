@@ -9,6 +9,7 @@ def test_inbox_excludes_terminal_receipts(db_session):
         "receipt_id": "r-accept",
         "recipient_ai": "agent:a",
         "task_id": "task-1",
+        "obligation_id": "obl-" + "task-1",
         "phase": "accepted",
         "caused_by_receipt_id": "NA",
     }
@@ -21,6 +22,7 @@ def test_inbox_excludes_terminal_receipts(db_session):
         "receipt_id": "r-complete",
         "recipient_ai": "agent:a",
         "task_id": "task-1",
+        "obligation_id": "obl-" + "task-1",
         "phase": "complete",
         "caused_by_receipt_id": "r-accept",
     }
@@ -35,6 +37,7 @@ def test_inbox_is_tenant_scoped(db_session):
         "receipt_id": "r-a",
         "recipient_ai": "agent:a",
         "task_id": "task-a",
+        "obligation_id": "obl-" + "task-a",
         "phase": "accepted",
         "caused_by_receipt_id": "NA",
     }
@@ -42,6 +45,7 @@ def test_inbox_is_tenant_scoped(db_session):
         "receipt_id": "r-b",
         "recipient_ai": "agent:a",
         "task_id": "task-b",
+        "obligation_id": "obl-" + "task-b",
         "phase": "accepted",
         "caused_by_receipt_id": "NA",
     }

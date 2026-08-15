@@ -7,6 +7,7 @@ def test_canonical_hash_omits_created_at_when_disabled():
     payload = {
         "receipt_id": "r-1",
         "task_id": "task-1",
+        "obligation_id": "obl-" + "task-1",
         "created_at": "2026-02-01T00:00:00Z",
         "value": {"b": 1, "a": 2},
     }
@@ -23,6 +24,7 @@ def test_canonical_hash_includes_created_at_when_enabled():
     payload = {
         "receipt_id": "r-2",
         "task_id": "task-2",
+        "obligation_id": "obl-" + "task-2",
         "created_at": "2026-02-01T00:00:00Z",
         "value": {"b": 1, "a": 2},
     }

@@ -20,6 +20,7 @@ def _receipt_payload(
         "schema_version": "1.0",
         "receipt_id": receipt_id,
         "task_id": task_id,
+        "obligation_id": f"obl-{task_id}",
         "parent_task_id": "NA",
         "caused_by_receipt_id": caused_by_receipt_id,
         "dedupe_key": "NA",

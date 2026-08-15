@@ -29,6 +29,7 @@ def _base_payload(
         "tenant_id": "tenant-a",
         "receipt_id": receipt_id,
         "task_id": task_id,
+        "obligation_id": f"obl-{task_id}",
         "parent_task_id": "NA",
         "caused_by_receipt_id": "NA",
         "dedupe_key": "NA",

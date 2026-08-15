@@ -45,7 +45,7 @@ class TestPhaseRulesAreEnforced:
     def _accepted(self, **overrides):
         base = {
             "schema_version": "1.0", "tenant_id": "default", "receipt_id": "r1",
-            "task_id": "t1", "parent_task_id": "NA", "caused_by_receipt_id": "NA",
+            "task_id": "t1", "obligation_id": "obl-t1", "parent_task_id": "NA", "caused_by_receipt_id": "NA",
             "dedupe_key": "NA", "attempt": 0, "from_principal": "p", "for_principal": "p",
             "source_system": "test", "recipient_ai": "a", "trust_domain": "d",
             "phase": "accepted", "status": "NA", "realtime": False, "task_type": "t",
