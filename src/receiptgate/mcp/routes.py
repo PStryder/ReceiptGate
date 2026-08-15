@@ -5,10 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
+from legivellum.authority import NotPermitted, Principal, bind_identity
 from pydantic import BaseModel, Field
 
 from receiptgate import __version__
-from receiptgate.auth import verify_api_key
+from receiptgate.auth import resolve_principal, verify_api_key
 from receiptgate.config import receiptgate_clock, settings
 from receiptgate.db import get_db_session
 from receiptgate.ledger_v1 import (
@@ -20,6 +21,7 @@ from receiptgate.ledger_v1 import (
     put_receipt,
     search_receipts,
 )
+from receiptgate.notary import TransitionRejected
 from receiptgate.validation_v1 import apply_server_fields, validate_receipt_payload
 
 
@@ -142,8 +144,17 @@ router = APIRouter(prefix="/mcp", tags=["mcp"], dependencies=[Depends(verify_api
 
 
 @router.post("")
-async def mcp_entry(request: MCPRequest, http_request: Request):
-    """Handle MCP JSON-RPC requests."""
+async def mcp_entry(
+    request: MCPRequest,
+    http_request: Request,
+    actor: Principal = Depends(resolve_principal),
+):
+    """Handle MCP JSON-RPC requests.
+
+    The acting principal is resolved from the credential by a dependency, so
+    every handler below has an authenticated identity and none of them has to
+    trust the request body for it.
+    """
     if request.method == "tools/list":
         return _jsonrpc_result(request.id, {"tools": MCP_TOOLS})
 
@@ -157,7 +168,13 @@ async def mcp_entry(request: MCPRequest, http_request: Request):
         return _jsonrpc_error(request.id, -32602, "Missing tool name")
 
     db = next(get_db_session())
-    tenant_id = settings.default_tenant_id
+
+    # Tenant comes from the authenticated principal, not from the caller and
+    # not from a server constant. Previously `apply_server_fields` overwrote
+    # every receipt's tenant_id with one constant, so the ledger was
+    # single-tenant by construction and every gate's tenant argument was
+    # decorative.
+    tenant_id = actor.visibility
 
     try:
         if tool_name == "receiptgate.health":
@@ -173,14 +190,35 @@ async def mcp_entry(request: MCPRequest, http_request: Request):
 
         if tool_name == "receiptgate.submit_receipt":
             receipt = arguments.get("receipt") or {}
+
+            # A caller asserting a DIFFERENT tenant is refused: that is an
+            # attempt to write into somebody else's visibility scope, and the
+            # caller does know its own tenant. `source_system` is bound rather
+            # than refused, because under a shared credential a caller cannot
+            # know which principal it resolves to.
+            try:
+                bind_identity(actor, {"tenant_id": receipt.get("tenant_id")})
+            except NotPermitted as exc:
+                return _jsonrpc_error(request.id, exc.code, exc.message)
+
             stored_at = receiptgate_clock()
-            payload = apply_server_fields(receipt, tenant_id=tenant_id, stored_at=stored_at)
+            payload = apply_server_fields(
+                receipt,
+                tenant_id=tenant_id,
+                stored_at=stored_at,
+                source_system=actor.id,
+            )
             errors = validate_receipt_payload(payload)
             if errors:
                 return _jsonrpc_error(request.id, "validation_failed", "Receipt validation failed", errors)
 
             try:
-                result = put_receipt(db, payload, tenant_id)
+                result = put_receipt(db, payload, tenant_id, actor=actor)
+            except TransitionRejected as exc:
+                # An illegal governance transition. Typed code, not a generic
+                # failure: the caller needs to distinguish "already terminated"
+                # from "you are not the custodian" from "the ledger is down".
+                return _jsonrpc_error(request.id, exc.code, exc.message)
             except ReceiptConflictError as exc:
                 return _jsonrpc_error(
                     request.id,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import UTC, datetime
 from typing import Literal
@@ -34,6 +35,25 @@ class Settings(BaseSettings):
         default="default",
         description="Default tenant identifier for single-tenant deployments",
     )
+
+    # Credential -> principal mapping, as JSON. Lets a deployment issue
+    # per-component keys and get per-component identity in the ledger instead
+    # of every gate sharing one credential and one unattributable identity.
+    #
+    #   {"<api-key>": {"id": "svc:cognigate", "role": "service",
+    #                  "visibility": "tenant-a"}}
+    principals_json: str = Field(
+        default="",
+        description="JSON map of API key -> {id, role, visibility}",
+    )
+    service_principal_id: str = Field(
+        default="svc:receiptgate",
+        description="Principal used when a valid key carries no mapping",
+    )
+
+    def principal_map(self) -> dict[str, dict[str, str]]:
+        """Parsed credential -> principal mapping."""
+        return _parse_principal_map(self.principals_json)
 
     # Database
     database_url: str = Field(
@@ -162,3 +182,31 @@ settings = Settings()
 def receiptgate_clock() -> str:
     """Return server clock timestamp for stored_at."""
     return datetime.now(UTC).isoformat()
+
+
+def _parse_principal_map(raw: str) -> dict[str, dict[str, str]]:
+    """Parse the credential->principal map, failing closed on malformed JSON.
+
+    A misconfigured map must not silently become "no mapping", because that
+    degrades every component to one shared identity without saying so.
+    """
+    if not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"RECEIPTGATE_PRINCIPALS is not valid JSON: {exc}. Refusing to run "
+            f"with an unparseable principal map, which would silently collapse "
+            f"every component to one identity."
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("RECEIPTGATE_PRINCIPALS must be a JSON object")
+    for key, entry in parsed.items():
+        if not isinstance(entry, dict) or "id" not in entry:
+            raise ValueError(
+                f"RECEIPTGATE_PRINCIPALS entry for {key[:6]}... must be an object with an 'id'"
+            )
+    return parsed
+
+

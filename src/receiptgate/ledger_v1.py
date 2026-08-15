@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import bindparam, text
+from legivellum.authority import Principal
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from receiptgate import notary
 from receiptgate.utils import canonical_hash
-from receiptgate.validation_v1 import TERMINAL_PHASES
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +45,21 @@ def _canonical_receipt_hash(payload: dict[str, Any]) -> str:
     return digest
 
 
-def store_receipt(db, payload: dict[str, Any], tenant_id: str) -> dict[str, Any]:
+def store_receipt(
+    db,
+    payload: dict[str, Any],
+    tenant_id: str,
+    *,
+    on_commit: Callable[[Any], None] | None = None,
+) -> dict[str, Any]:
+    """Append a receipt, and apply the governance mutation it implies.
+
+    `on_commit` runs inside the same transaction as the INSERT. That is the
+    atomicity the whole model rests on: a committed receipt and the custody
+    state it produces are one write. If the projection mutation fails, the
+    receipt is not stored either -- there is no state where the ledger says an
+    obligation was accepted and custody says nobody holds it.
+    """
     stored_at = _now_iso()
     receipt_id = payload.get("receipt_id")
     if not receipt_id:
@@ -78,6 +94,10 @@ def store_receipt(db, payload: dict[str, Any], tenant_id: str) -> dict[str, Any]
             ),
             record,
         )
+        # Same transaction, deliberately. Receipt append and projection
+        # mutation are one atomic act or neither happens.
+        if on_commit is not None:
+            on_commit(db)
         db.commit()
     except Exception:
         db.rollback()
@@ -105,7 +125,23 @@ def store_receipt(db, payload: dict[str, Any], tenant_id: str) -> dict[str, Any]
     return {"receipt_id": receipt_id, "stored_at": stored_at, "tenant_id": tenant_id}
 
 
-def put_receipt(db, payload: dict[str, Any], tenant_id: str) -> dict[str, Any]:
+def put_receipt(
+    db,
+    payload: dict[str, Any],
+    tenant_id: str,
+    *,
+    actor: Principal | None = None,
+) -> dict[str, Any]:
+    """Commit a proposed governance transition, or refuse it.
+
+    The receipt is not a description of something that already happened. This
+    call *is* the transition: if it commits, responsibility has moved; if it is
+    refused, nothing has changed anywhere.
+
+    `actor` is the authenticated principal. When absent the transition guards
+    are skipped, which exists only so the pre-notary tests and internal replay
+    paths keep working -- the MCP route always supplies one.
+    """
     receipt_id = payload.get("receipt_id")
     if not receipt_id:
         raise ValueError("receipt_id is required")
@@ -128,8 +164,29 @@ def put_receipt(db, payload: dict[str, Any], tenant_id: str) -> dict[str, Any]:
             incoming_hash=incoming_hash,
         )
 
+    # Evaluate before writing anything. Illegal transitions are refused with a
+    # typed code and leave no trace.
+    transition_name: str | None = None
+    custody = None
+    if actor is not None:
+        transition_name, custody, _state = notary.evaluate(
+            db, payload, actor=actor, tenant_id=tenant_id
+        )
+
+    def _project(session: Any) -> None:
+        if transition_name is None:
+            return
+        notary.apply_projection(
+            session,
+            payload,
+            transition=transition_name,
+            custody=custody,
+            actor=actor,
+            tenant_id=tenant_id,
+        )
+
     try:
-        result = store_receipt(db, payload, tenant_id)
+        result = store_receipt(db, payload, tenant_id, on_commit=_project)
     except IntegrityError:
         existing = get_receipt(db, tenant_id, receipt_id)
         if existing:
@@ -147,6 +204,16 @@ def put_receipt(db, payload: dict[str, Any], tenant_id: str) -> dict[str, Any]:
                 existing_hash=existing_hash,
                 incoming_hash=incoming_hash,
             )
+        # No receipt collision, so the IntegrityError came from the custody
+        # projection: another actor committed acceptance of this obligation
+        # first. The database decided, not a check-then-write in application
+        # code, so exactly one custodian exists and this is the loser.
+        if transition_name == "ACCEPT":
+            raise notary.TransitionRejected(
+                "OBLIGATION_ALREADY_ACCEPTED",
+                f"obligation {payload.get('obligation_id')} already has a "
+                f"custodian; exactly one acceptance can win",
+            )
         raise
 
     result.update({"canonical_hash": incoming_hash, "idempotent_replay": False})
@@ -154,33 +221,46 @@ def put_receipt(db, payload: dict[str, Any], tenant_id: str) -> dict[str, Any]:
 
 
 def list_inbox(db, tenant_id: str, recipient_ai: str, limit: int = 20) -> dict[str, Any]:
-    terminal_phases = sorted(TERMINAL_PHASES)
-    query = text(
-        """
-        SELECT receipt_id, task_id, phase, stored_at
-        FROM receipts_v1 r
-        WHERE tenant_id = :tenant_id
-          AND recipient_ai = :recipient_ai
-          AND phase = 'accepted'
-          AND archived_at IS NULL
-          AND NOT EXISTS (
-            SELECT 1 FROM receipts_v1 t
-            WHERE t.tenant_id = r.tenant_id
-              AND t.task_id = r.task_id
-              AND t.phase IN :terminal_phases
-          )
-        ORDER BY stored_at DESC
-        LIMIT :limit
-        """
-    ).bindparams(bindparam("terminal_phases", expanding=True))
+    """Open obligations this principal currently holds.
+
+    A VIEW, derived from canonical custody state. Nothing pushes rows here.
+
+    It used to select `accepted` receipts and exclude any whose *task_id* had a
+    terminal receipt, which broke in both directions:
+
+      - Fan-out. Two reviewers accepting one task_id both vanished from their
+        inboxes the moment either completed, because the NOT EXISTS correlated
+        on task_id and not on the obligation.
+      - Escalation delivered nothing. Only `accepted` receipts were visible, so
+        a transfer put the obligation in nobody's inbox: gone from the issuer's
+        because escalate is terminal, absent from the target's because the
+        escalate receipt is not phase='accepted'. The whole soft-push model had
+        no reader.
+
+    Reading custody fixes both. The current custodian is whoever holds it now,
+    however they came to hold it, and the obligation stays visible until a
+    committed transition closes or transfers it.
+    """
     rows = db.execute(
-        query,
-        {
-            "tenant_id": tenant_id,
-            "recipient_ai": recipient_ai,
-            "limit": limit,
-            "terminal_phases": terminal_phases,
-        },
+        text(
+            """
+            SELECT c.obligation_id,
+                   o.task_id,
+                   c.state,
+                   c.custody_deadline,
+                   c.accepted_receipt_id AS receipt_id
+              FROM custody_state c
+              JOIN obligations o
+                ON o.tenant_id = c.tenant_id
+               AND o.obligation_id = c.obligation_id
+             WHERE c.tenant_id = :tenant_id
+               AND c.current_custodian = :recipient_ai
+               AND c.state IN ('OPEN', 'OVERDUE')
+             ORDER BY c.updated_at DESC
+             LIMIT :limit
+            """
+        ),
+        {"tenant_id": tenant_id, "recipient_ai": recipient_ai, "limit": limit},
     ).mappings().all()
 
     return {

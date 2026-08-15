@@ -26,7 +26,11 @@ def _receipt_payload(
         "dedupe_key": "NA",
         "attempt": 0,
         "from_principal": "principal:p",
-        "for_principal": "principal:p",
+        # The executor. On an accepted obligation this is the party that owes
+        # the work and therefore the inbox owner, so it coincides with
+        # recipient_ai -- which is what the protocol says and what custody is
+        # derived from.
+        "for_principal": recipient_ai,
         "source_system": "receiptgate-test",
         "recipient_ai": recipient_ai,
         "trust_domain": "test",

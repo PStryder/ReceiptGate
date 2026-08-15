@@ -47,8 +47,35 @@ def _schema_dir() -> Path:
     return _schema_root() / "schema"
 
 
+def _strip_sql_comments(sql: str) -> str:
+    """Remove line comments before splitting on semicolons.
+
+    The splitter below is naive by design -- these are our own schema files,
+    not arbitrary SQL -- but it used to split on every `;` including ones
+    inside `--` comments. A comment containing ordinary prose punctuation
+    therefore produced a fragment like `if the two disagree, the ledger is`
+    which SQLite reported as `near "if": syntax error`, from a file that is
+    perfectly valid SQL.
+
+    That is a trap for whoever writes the next migration, so comments are
+    stripped first. String literals are left alone: a `--` inside quotes is
+    not a comment, and none of our schema files contain one.
+    """
+    out = []
+    for line in sql.splitlines():
+        in_string = False
+        for i, ch in enumerate(line):
+            if ch == "'":
+                in_string = not in_string
+            elif ch == "-" and not in_string and line[i : i + 2] == "--":
+                line = line[:i]
+                break
+        out.append(line)
+    return chr(10).join(out)
+
+
 def _read_sql_file(path: Path) -> list[str]:
-    sql = path.read_text(encoding="utf-8")
+    sql = _strip_sql_comments(path.read_text(encoding="utf-8"))
     statements = []
     for stmt in sql.split(";"):
         cleaned = stmt.strip()

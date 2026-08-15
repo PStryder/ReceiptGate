@@ -10,6 +10,7 @@ import logging
 import secrets
 
 from fastapi import Header, HTTPException, status
+from legivellum.authority import Principal
 
 from receiptgate.config import settings
 
@@ -63,3 +64,63 @@ def verify_api_key(
 def generate_api_key() -> str:
     """Generate a new API key with rg_ prefix."""
     return f"{API_KEY_PREFIX}{secrets.token_urlsafe(32)}"
+
+
+def _presented_key(authorization: str | None, x_api_key: str | None) -> str | None:
+    if authorization and authorization.startswith("Bearer "):
+        return authorization[7:]
+    return x_api_key
+
+
+def resolve_principal(
+    authorization: str | None = Header(None),
+    x_api_key: str | None = Header(None, alias="X-API-Key"),
+) -> Principal:
+    """Derive the acting principal from the credential, never from the body.
+
+    Governance-critical identity -- who performed a transition, which service
+    emitted it, which tenant it belongs to -- must be bound to authentication.
+    Previously every one of those was a request-body field: any holder of the
+    shared key could submit
+    `{phase: "complete", recipient_ai: "agent:finance", source_system: "delegate"}`
+    and the ledger recorded a discharge attributed to a component that never
+    acted. Receipts are append-only, so there is no way to correct it.
+
+    `RECEIPTGATE_PRINCIPALS` maps credentials to principals, so a deployment can
+    issue per-component keys and get per-component identity. It is a JSON object:
+
+        {"<api-key>": {"id": "svc:cognigate", "role": "service",
+                       "visibility": "tenant-a"}}
+
+    With a single shared key configured the whole stack still resolves to one
+    principal -- which is not per-component identity, but it is honest about
+    that rather than believing whatever the body claims.
+    """
+    presented = _presented_key(authorization, x_api_key)
+
+    mapping = settings.principal_map()
+    if presented and presented in mapping:
+        entry = mapping[presented]
+        return Principal(
+            id=entry["id"],
+            role=entry.get("role", "service"),
+            visibility=entry.get("visibility", settings.default_tenant_id),
+        )
+
+    if settings.allow_insecure_dev:
+        # Development only. Named so it is obvious in the ledger that these
+        # transitions were performed by an unauthenticated caller.
+        return Principal(
+            id="svc:insecure-dev",
+            role="service",
+            visibility=settings.default_tenant_id,
+        )
+
+    # A valid shared key with no principal mapping: authenticated, but with no
+    # identity beyond "holds the key".
+    verify_api_key(authorization=authorization, x_api_key=x_api_key)
+    return Principal(
+        id=settings.service_principal_id,
+        role="service",
+        visibility=settings.default_tenant_id,
+    )

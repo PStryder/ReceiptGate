@@ -25,8 +25,15 @@ def _receipt_payload(
         "caused_by_receipt_id": caused_by_receipt_id,
         "dedupe_key": "NA",
         "attempt": 0,
-        "from_principal": "principal:p",
-        "for_principal": "principal:p",
+        # The requester opens the obligation; the executor discharges it. So a
+        # terminal receipt is issued BY the custodian, which is what the
+        # custodian check evaluates against.
+        "from_principal": "principal:p" if phase == "accepted" else recipient_ai,
+        # The executor. On an accepted obligation this is the party that owes
+        # the work and therefore the inbox owner, so it coincides with
+        # recipient_ai -- which is what the protocol says and what custody is
+        # derived from.
+        "for_principal": recipient_ai,
         "source_system": "receiptgate-test",
         "recipient_ai": recipient_ai,
         "trust_domain": "test",

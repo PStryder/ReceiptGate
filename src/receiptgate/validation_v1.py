@@ -121,9 +121,27 @@ def is_terminal_receipt(payload: dict[str, Any]) -> bool:
     return payload.get("phase") in TERMINAL_PHASES
 
 
-def apply_server_fields(payload: dict[str, Any], *, tenant_id: str, stored_at: str) -> dict[str, Any]:
-    """Apply server-assigned fields without mutating input."""
+def apply_server_fields(
+    payload: dict[str, Any],
+    *,
+    tenant_id: str,
+    stored_at: str,
+    source_system: str | None = None,
+) -> dict[str, Any]:
+    """Apply server-assigned fields without mutating input.
+
+    `tenant_id` and `source_system` are bound from the authenticated principal,
+    not taken from the body. Under a single shared credential every component
+    resolves to the same principal, so `source_system` becomes that principal
+    rather than whatever the caller wrote -- which is not per-component
+    identity, but it is an honest record of what the ledger actually knows.
+    Issuing per-component credentials (RECEIPTGATE_PRINCIPALS) is what makes it
+    specific, and until then the ledger should not imply a precision it does
+    not have.
+    """
     updated = dict(payload)
+    if source_system:
+        updated["source_system"] = source_system
     updated["tenant_id"] = tenant_id
     updated["stored_at"] = stored_at
     return updated
