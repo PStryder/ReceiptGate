@@ -13,6 +13,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    # ReceiptGate runs on Postgres, and the custody-exclusion guarantee can
+    # only be demonstrated there: SQLite serializes writers, so two acceptances
+    # of one obligation never interleave and the race under test cannot occur.
+    # Without this service the concurrency test skips and CI proves less than
+    # it appears to.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: receiptgate
+          POSTGRES_PASSWORD: receiptgate
+          POSTGRES_DB: receiptgate
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U receiptgate"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      RECEIPTGATE_TEST_DATABASE_URL: postgresql+psycopg://receiptgate:receiptgate@localhost:5432/receiptgate
+      RECEIPTGATE_ALLOW_INSECURE_DEV: "true"
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4

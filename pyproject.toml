@@ -18,7 +18,10 @@ dependencies = [
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
     "sqlalchemy>=2.0.25",
-    "psycopg>=3.1.18",
+    # [binary] deliberately. Plain psycopg needs a system libpq, which no
+    # image here provides, so `import psycopg` failed outright -- the Postgres
+    # path was declared, branched on in config, and never executable.
+    "psycopg[binary]>=3.1.18",
     "jsonschema>=4.21.1",
     # Canonical receipt protocol. A hard dependency: this gate must not be
     # able to start without the validator, and must never fall back to

@@ -445,8 +445,9 @@ def rebuild_projection(db, tenant_id: str) -> dict[str, int]:
     applied = 0
     skipped = 0
     for row in rows:
+        # Postgres decodes JSONB to a dict; SQLite returns the stored text.
         payload = row["payload"]
-        if isinstance(payload, str):
+        if isinstance(payload, (str, bytes, bytearray)):
             payload = json.loads(payload)
         obligation_id = payload.get("obligation_id")
         if not obligation_id:

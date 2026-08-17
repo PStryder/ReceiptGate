@@ -57,7 +57,7 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = Field(
-        default="sqlite:///./receiptgate.db",
+        default="postgresql+psycopg://receiptgate:receiptgate@localhost:5432/receiptgate",
         description="SQLAlchemy database URL",
     )
     auto_migrate_on_startup: bool = Field(

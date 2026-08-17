@@ -196,6 +196,81 @@ class TestSingleCustody:
         assert row is not None
         assert row.current_custodian == "agent:a"
 
+    @pytest.mark.requires_postgres
+    def test_two_concurrent_acceptances_resolve_to_one_custodian(
+        self, db_session, db_url
+    ):
+        """The Phase 2 claim, exercised rather than assumed.
+
+        Both transactions read empty custody before either writes -- the exact
+        check-then-write window application logic cannot close -- and then race
+        to insert. Exactly one must commit.
+
+        This cannot run on SQLite: writers are serialized behind a
+        database-level lock there, so the second acceptance waits for the first
+        rather than interleaving with it, and the test would pass without the
+        race ever happening.
+        """
+        import threading
+
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        # db_session already reset and applied the schema. Re-applying it here
+        # would replay the legacy view migration, which cannot drop
+        # v_open_obligations while v_inbox depends on it.
+        engine = create_engine(db_url)
+        Session = sessionmaker(bind=engine)
+
+        barrier = threading.Barrier(2)
+        outcomes: list[tuple[str, str]] = []
+
+        def propose(custodian: str) -> None:
+            session = Session()
+            try:
+                # Read first, so both see NONE, then release together.
+                notary.read_custody(session, TENANT, "obl-race")
+                barrier.wait(timeout=15)
+                put_receipt(
+                    session,
+                    receipt(
+                        receipt_id=f"r-{custodian}",
+                        obligation_id="obl-race",
+                        executor=custodian,
+                    ),
+                    TENANT,
+                    actor=SERVICE,
+                )
+                outcomes.append(("committed", custodian))
+            except Exception as exc:
+                outcomes.append((type(exc).__name__, custodian))
+            finally:
+                session.close()
+
+        threads = [
+            threading.Thread(target=propose, args=(c,))
+            for c in ("agent:a", "agent:b")
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        committed = [o for o in outcomes if o[0] == "committed"]
+        assert len(committed) == 1, (
+            f"expected exactly one acceptance to commit, got {outcomes}; "
+            f"double custody is representable"
+        )
+
+        check = Session()
+        try:
+            row = notary.read_custody(check, TENANT, "obl-race")
+            assert row is not None
+            assert row.current_custodian == committed[0][1]
+        finally:
+            check.close()
+            engine.dispose()
+
     def test_exclusion_is_a_database_constraint(self, db_session):
         """Not a check-then-write.
 
@@ -203,9 +278,20 @@ class TestSingleCustody:
         read and the write, which application logic cannot promise. Assert the
         constraint exists rather than trusting the code path.
         """
-        rows = db_session.execute(
-            text("SELECT name, sql FROM sqlite_master WHERE type = 'index'")
-        ).mappings().all()
+        from receiptgate.config import settings
+
+        if settings.db_backend == "postgres":
+            rows = db_session.execute(
+                text(
+                    "SELECT indexname AS name, indexdef AS sql FROM pg_indexes "
+                    "WHERE tablename = 'custody_state'"
+                )
+            ).mappings().all()
+        else:
+            rows = db_session.execute(
+                text("SELECT name, sql FROM sqlite_master WHERE type = 'index'")
+            ).mappings().all()
+
         names = {r["name"] for r in rows}
         assert "idx_custody_one_live_grant" in names, (
             "the partial unique index that enforces single custody is missing; "

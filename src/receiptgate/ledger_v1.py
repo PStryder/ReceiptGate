@@ -45,6 +45,22 @@ def _canonical_receipt_hash(payload: dict[str, Any]) -> str:
     return digest
 
 
+def _decode_payload(raw: Any) -> dict[str, Any]:
+    """Return the receipt payload as a dict, whichever driver produced it.
+
+    `payload` is a JSONB column. Postgres decodes it to a dict on the way out;
+    SQLite has no JSON type and hands back the stored text. Calling json.loads
+    unconditionally therefore worked on SQLite and raised
+    `TypeError: the JSON object must be str, bytes or bytearray, not dict` on
+    Postgres -- which nothing noticed, because ReceiptGate only ever ran on
+    SQLite despite being the one component whose correctness is about
+    concurrent writes.
+    """
+    if isinstance(raw, (str, bytes, bytearray)):
+        return json.loads(raw)
+    return dict(raw)
+
+
 def store_receipt(
     db,
     payload: dict[str, Any],
@@ -303,7 +319,7 @@ def list_task_receipts(
         payload = {}
         if row.get("payload"):
             try:
-                payload = json.loads(row["payload"])
+                payload = _decode_payload(row["payload"])
             except json.JSONDecodeError:
                 payload = {}
         entry = {
@@ -343,7 +359,7 @@ def get_receipt(db, tenant_id: str, receipt_id: str) -> dict[str, Any] | None:
     payload = {}
     if row.get("payload"):
         try:
-            payload = json.loads(row["payload"])
+            payload = _decode_payload(row["payload"])
         except json.JSONDecodeError:
             payload = {}
     if "stored_at" not in payload:
@@ -392,7 +408,7 @@ def search_receipts(
         payload = {}
         if row.get("payload"):
             try:
-                payload = json.loads(row["payload"])
+                payload = _decode_payload(row["payload"])
             except json.JSONDecodeError:
                 payload = {}
         receipts.append({
