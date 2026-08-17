@@ -99,5 +99,5 @@ jobs:
           cp -r _legivellum _ctx/LegiVellum
           mkdir -p _ctx/ReceiptGate
           cp -r pyproject.toml README.md src schema _ctx/ReceiptGate/
-          docker build -f ReceiptGate/Dockerfile -t receiptgate-ci _ctx
+          docker build -f Dockerfile -t receiptgate-ci _ctx
           docker run --rm -v "$PWD/_legivellum/problemata_demo:/probe:ro" receiptgate-ci python /probe/container_validation_probe.py

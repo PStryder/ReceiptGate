@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import create_engine, text
 
 from receiptgate.config import settings
@@ -45,5 +46,46 @@ def test_apply_schema_creates_tables_and_indexes(tmp_path, monkeypatch):
         assert "idx_receipts_v1_inbox" in v1_indexes
         assert "idx_receipts_v1_task" in v1_indexes
         assert "idx_receipts_v1_caused_by" in v1_indexes
+
+    engine.dispose()
+
+
+@pytest.mark.requires_postgres
+def test_apply_schema_is_reappliable(db_url, monkeypatch):
+    """Migrations run on every startup, so they must survive a restart.
+
+    `002_receipt_views.sql` dropped `v_open_obligations` before `v_inbox`, which
+    selects from it. On an empty database both drops are no-ops and the file
+    succeeds; on the second run Postgres refuses with DependentObjectsStillExist
+    and `init_db()` raises, so the process exits during startup. ReceiptGate
+    could therefore be started but never *re*started -- the ledger came back only
+    if its volume was destroyed first, taking every receipt with it.
+
+    This is marked requires_postgres deliberately. SQLite drops views without
+    checking dependents, so it applies the broken file twice quite happily and a
+    SQLite run of this test would pass while the bug was fully present.
+    """
+    monkeypatch.setattr(settings, "enable_graph_layer", False)
+    monkeypatch.setattr(settings, "enable_semantic_layer", False)
+
+    engine = create_engine(db_url)
+    with engine.begin() as conn:
+        conn.execute(text("DROP SCHEMA public CASCADE"))
+        conn.execute(text("CREATE SCHEMA public"))
+
+    apply_schema(engine)
+    apply_schema(engine)  # the restart
+
+    with engine.connect() as conn:
+        views = {
+            row["table_name"]
+            for row in conn.execute(
+                text(
+                    "SELECT table_name FROM information_schema.views "
+                    "WHERE table_schema = 'public'"
+                )
+            ).mappings()
+        }
+    assert {"v_inbox", "v_open_obligations"} <= views
 
     engine.dispose()
