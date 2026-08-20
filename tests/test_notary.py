@@ -589,3 +589,57 @@ class TestProjectionIsRebuildable:
             "than the live projection; the ledger is authoritative and the two "
             "must agree"
         )
+
+
+class TestReAcceptByTheHolder:
+    """Re-accepting an obligation you already hold changes nothing.
+
+    Escalation transfers custody to a worker; that worker then claims the
+    re-offered lease, which makes AsyncGate propose an acceptance for a
+    principal that already holds the obligation. Refusing that meant the ledger
+    rejected a correct sequence of events -- which is exactly why the escalation
+    demo could never reach a completion.
+
+    The exclusion guarantee is untouched: it is about a *different* claimant
+    winning, and the partial unique index still decides that.
+    """
+
+    def test_holder_may_reaccept_and_custody_is_unchanged(self, db_session):
+        accept(db_session, obligation_id="obl-1", executor="agent:worker-a")
+        before = notary.read_custody(db_session, TENANT, "obl-1")
+
+        accept(db_session, obligation_id="obl-1", executor="agent:worker-a",
+               rid="r-accept-again")
+
+        after = notary.read_custody(db_session, TENANT, "obl-1")
+        assert get_receipt(db_session, TENANT, "r-accept-again"), "receipt still appended"
+        assert after.current_custodian == before.current_custodian
+        assert after.state == before.state
+        assert after.version == before.version, "projection was not rewritten"
+
+    def test_a_different_principal_still_cannot_accept(self, db_session):
+        """The guard that matters is unchanged.
+
+        Drop the is_custodian condition from the no-op and this fails: every
+        second acceptance is waved through and two principals both believe they
+        hold one obligation.
+        """
+        accept(db_session, obligation_id="obl-2", executor="agent:worker-a")
+        with pytest.raises(TransitionRejected) as exc:
+            accept(db_session, obligation_id="obl-2", executor="agent:worker-b",
+                   rid="r-accept-b")
+        assert exc.value.code == "OBLIGATION_ALREADY_ACCEPTED"
+
+    def test_completion_after_reaccept_still_closes(self, db_session):
+        """The no-op must not leave an obligation nothing can close."""
+        accept(db_session, obligation_id="obl-3", executor="agent:worker-a")
+        accept(db_session, obligation_id="obl-3", executor="agent:worker-a",
+               rid="r-accept-3b")
+        put_receipt(
+            db_session,
+            receipt(receipt_id="r-c3", obligation_id="obl-3",
+                    executor="agent:worker-a", phase="complete"),
+            TENANT,
+            actor=SERVICE,
+        )
+        assert notary.read_custody(db_session, TENANT, "obl-3").state == "CLOSED"

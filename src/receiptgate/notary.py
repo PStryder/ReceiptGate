@@ -63,6 +63,12 @@ DEFAULT_CUSTODY_SECONDS = 900
 STATE_NONE = "NONE"
 
 
+# Returned by `evaluate` when a transition is legal but has nothing to change.
+# Not a transition name in transitions.v1.json, and deliberately not one: the
+# model describes state changes, and this is the absence of one.
+ACCEPT_NOOP = "ACCEPT_NOOP"
+
+
 class TransitionRejected(Exception):
     """A proposed transition is illegal. Carries the typed protocol code."""
 
@@ -192,6 +198,28 @@ def evaluate(
     # anyone else, which keeps this a delegation rather than a bypass.
     transition_actor = resolve_transition_actor(actor, payload)
     is_custodian = bool(custody and custody.current_custodian == transition_actor)
+
+    # Re-accepting an obligation you already hold changes nothing, so it is a
+    # no-op rather than a violation. The exclusion guarantee is about a
+    # *different* claimant winning, and the partial unique index still decides
+    # that; it was never about forbidding the holder from saying so twice.
+    #
+    # This is reached for real: escalation transfers custody to a worker, and
+    # that worker then claims the re-offered lease, which makes AsyncGate
+    # propose an acceptance for a principal that already holds the obligation.
+    # Refusing it would mean the ledger rejects a correct sequence of events.
+    # The comparison is against the principal this ACCEPT would make custodian,
+    # not against the actor proposing it. For an acceptance those are different
+    # by design: a requester proposes that an executor take the work on, so the
+    # actor is `from_principal` and the resulting custodian is `for_principal`.
+    if (
+        name == "ACCEPT"
+        and custody is not None
+        and state in {"OPEN", "OVERDUE"}
+        and custody.current_custodian == payload.get("for_principal")
+    ):
+        return ACCEPT_NOOP, custody, state
+
     try:
         check_transition(
             name,
@@ -252,6 +280,12 @@ def apply_projection(
     Called inside the same transaction as the receipt append. Never touches the
     receipt table.
     """
+    if transition == ACCEPT_NOOP:
+        # The proposer already holds it. The receipt is still appended -- the
+        # ledger records that the claim was made -- but governance state is
+        # already what this transition would set it to.
+        return
+
     obligation_id = str(payload["obligation_id"])
     receipt_id = str(payload["receipt_id"])
 
