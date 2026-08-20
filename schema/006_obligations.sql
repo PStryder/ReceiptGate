@@ -47,10 +47,13 @@ CREATE TABLE IF NOT EXISTS custody_state (
   tenant_id            TEXT NOT NULL,
   obligation_id        TEXT NOT NULL,
 
-  -- OPEN | OVERDUE | CLOSED | TRANSFERRED. Mirrors transitions.v1.json;
-  -- NONE is the absence of a row rather than a value.
+  -- OPEN | OVERDUE | CLOSED. Mirrors transitions.v1.json; NONE is the absence
+  -- of a row rather than a value. There is deliberately no TRANSFERRED: custody
+  -- transfer keeps the obligation OPEN under a new custodian, because
+  -- responsibility moved rather than ended, so no transition or event could
+  -- reach it and no code ever wrote it.
   state                TEXT NOT NULL
-    CHECK (state IN ('OPEN', 'OVERDUE', 'CLOSED', 'TRANSFERRED')),
+    CHECK (state IN ('OPEN', 'OVERDUE', 'CLOSED')),
 
   -- Who owes it right now. NULL once terminal.
   current_custodian    TEXT NULL,
@@ -61,7 +64,6 @@ CREATE TABLE IF NOT EXISTS custody_state (
 
   accepted_receipt_id  TEXT NOT NULL,
   closed_by_receipt_id TEXT NULL,
-  transferred_to       TEXT NULL,
 
   -- Optimistic-concurrency counter for transitions that read then write.
   version              INTEGER NOT NULL DEFAULT 1,
@@ -79,7 +81,7 @@ CREATE TABLE IF NOT EXISTS custody_state (
        AND current_custodian IS NOT NULL
        AND custody_deadline IS NOT NULL)
     OR
-    (state IN ('CLOSED', 'TRANSFERRED')
+    (state = 'CLOSED'
        AND closed_by_receipt_id IS NOT NULL)
   )
 );
